@@ -29,6 +29,8 @@ export interface PanelServices {
   selectProvider?(provider: string): void;
   /** Resolves false when the session could not be reached (the reply card then offers a retry). */
   openSession?(session: Session): void | Promise<boolean | void>;
+  /** Settings, on the page with this id, such as "agent-plugins". */
+  openSettingsPage?(page: string): void;
   sources?: Record<string, SourcePreferences>;
   draft?: {
     unsaved: boolean;

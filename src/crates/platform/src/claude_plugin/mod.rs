@@ -8,7 +8,10 @@
 //! The HUD's answers to the Claude desktop app's questions go in this way
 //! (`ClaudeReplies`); a product build may leave its own messages with
 //! `leave`, and reads how they went with `state`.
-use agent_hud_core::{l10n, replies::SessionReplies};
+use agent_hud_core::{
+    l10n,
+    replies::{AnswerFix, SessionReplies, Unreachable},
+};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
@@ -91,12 +94,32 @@ pub fn claude_config_directory(home: &Path) -> PathBuf {
         .unwrap_or_else(|| home.join(".claude"))
 }
 
+/// Claude Code's record of the plugin, when it lists it as installed.
+fn listed(claude_config: &Path) -> Option<Value> {
+    let bytes = fs::read(claude_config.join("plugins/installed_plugins.json")).ok()?;
+    let mut value = serde_json::from_slice::<Value>(&bytes).ok()?;
+    value["plugins"].get_mut(PLUGIN_ID).map(Value::take)
+}
+
 /// Whether Claude Code lists the plugin as installed.
 pub fn installed(claude_config: &Path) -> bool {
-    fs::read(claude_config.join("plugins/installed_plugins.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .is_some_and(|value| value["plugins"].get(PLUGIN_ID).is_some())
+    listed(claude_config).is_some()
+}
+
+/// When Claude Code last installed or updated the plugin; None when it lists
+/// none, or no time it can read.
+pub fn installed_at(claude_config: &Path) -> Option<SystemTime> {
+    listed(claude_config)?
+        .as_array()?
+        .iter()
+        .filter_map(|entry| {
+            entry["lastUpdated"]
+                .as_str()
+                .or(entry["installedAt"].as_str())
+        })
+        .filter_map(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        .map(SystemTime::from)
+        .max()
 }
 
 /// Claude Code's arguments to install the plugin from `folder`, for this user.
@@ -166,6 +189,27 @@ impl ClaudeChannel {
                 value.get("ended").is_none().then(|| id.to_string())
             })
             .collect()
+    }
+
+    /// When `session` last checked in, however long ago; None when it never
+    /// did or has ended.
+    pub fn last_check_in(&self, session: &str) -> Option<SystemTime> {
+        if !valid_name(session) {
+            return None;
+        }
+        let path = self
+            .directory
+            .join("sessions")
+            .join(format!("{session}.json"));
+        let metadata = fs::symlink_metadata(&path).ok()?;
+        if !metadata.is_file() {
+            return None;
+        }
+        let value: Value = serde_json::from_slice(&fs::read(&path).ok()?).ok()?;
+        if value.get("ended").is_some() {
+            return None;
+        }
+        metadata.modified().ok()
     }
 
     /// Writes the plugin's files into `folder` (an absolute path), pointing
@@ -381,43 +425,82 @@ impl ClaudeChannel {
 /// The HUD's answers to the Claude desktop app's questions, through the plugin.
 pub struct ClaudeReplies {
     channel: ClaudeChannel,
+    /// Claude Code's own folder, where it lists the plugins it installed.
+    claude_config: PathBuf,
 }
 
 impl ClaudeReplies {
-    pub fn new(channel: ClaudeChannel) -> Self {
-        Self { channel }
+    pub fn new(channel: ClaudeChannel, claude_config: PathBuf) -> Self {
+        Self {
+            channel,
+            claude_config,
+        }
+    }
+
+    /// Why words would not reach `session`, which has not checked in lately,
+    /// and what would change it: the plugin is not installed; the session
+    /// ran it since it was installed, so the app has paused the session; or
+    /// the session started before the install and has not loaded it.
+    fn unreachable(&self, session: &str) -> Unreachable {
+        if !installed(&self.claude_config) {
+            return Unreachable::new(
+                l10n::text(
+                    "Claude Code 还没装 Agent HUD 插件，装好后就能在 Agent HUD 里回答 Claude 的提问（设置 → 智能体插件）。",
+                    "Claude Code doesn't have Agent HUD's plugin yet. Install it to answer Claude's questions in Agent HUD (Settings → Agent plugins).",
+                ),
+                Some(AnswerFix::InstallPlugin),
+            );
+        }
+        let paused = installed_at(&self.claude_config)
+            .zip(self.channel.last_check_in(session))
+            .is_some_and(|(installed, checked_in)| checked_in >= installed);
+        if paused {
+            return Unreachable::new(
+                l10n::text(
+                    "这个会话有一阵没回应 Agent HUD 插件了，可能被 Claude 暂停了。在 Claude 里打开这个会话就能回答。",
+                    "This session hasn't answered Agent HUD's plugin for a while; Claude may have paused it. Open it in Claude to answer.",
+                ),
+                None,
+            );
+        }
+        Unreachable::new(
+            l10n::text(
+                "这个会话还没加载 Agent HUD 插件。在会话里执行 /reload-plugins 后，就能在 Agent HUD 里回答。",
+                "This session hasn't loaded Agent HUD's plugin. Run /reload-plugins in it to answer in Agent HUD.",
+            ),
+            Some(AnswerFix::ReloadPlugins),
+        )
     }
 }
 
-/// Why a question in a session that has not checked in lately can only be
-/// answered in Claude: the plugin is not installed, the session has not
-/// loaded it, or the app has paused the session.
-fn not_loaded() -> String {
+/// Why words for another client's session never reach it: the plugin is Claude Code's.
+fn not_claude() -> String {
     l10n::text(
-        "这个会话现在没有运行 Agent HUD 的 Claude Code 插件（设置 → 智能体 → 智能体插件）。",
-        "This session isn't running Agent HUD's Claude Code plugin right now (Settings → Agents → Agent plugins).",
+        "Agent HUD 的插件只能把回答发进 Claude Code 会话。",
+        "Agent HUD's plugin sends answers only into Claude Code sessions.",
     )
 }
 
 impl SessionReplies for ClaudeReplies {
-    fn reaches(&self, source: &str, session: &str) -> Result<(), String> {
-        if source == agent_hud_agents::claude::AGENT.id
-            && self.channel.loaded(SystemTime::now()).contains(session)
-        {
+    fn reaches(&self, source: &str, session: &str) -> Result<(), Unreachable> {
+        if source != agent_hud_agents::claude::AGENT.id {
+            return Err(Unreachable::new(not_claude(), None));
+        }
+        if self.channel.loaded(SystemTime::now()).contains(session) {
             Ok(())
         } else {
-            Err(not_loaded())
+            Err(self.unreachable(session))
         }
     }
     fn reply(&self, source: &str, session: &str, words: &str) -> Result<(), String> {
         if source != agent_hud_agents::claude::AGENT.id {
-            return Err(not_loaded());
+            return Err(not_claude());
         }
         self.channel
             .hand(session, words, SystemTime::now())
             .map(drop)
             .map_err(|refusal| match refusal {
-                Refusal::NotLoaded => not_loaded(),
+                Refusal::NotLoaded => self.unreachable(session).note,
                 Refusal::Rejected(_) => l10n::text(
                     "插件不能发送以 / 开头的话。",
                     "The plugin can't send words that start with /.",

@@ -2,6 +2,7 @@
 //! window, as cards, and how their answers go back.
 use crate::*;
 use agent_hud_agents::claude::{transcript::*, AGENT as CLAUDE, REPLIES};
+use agent_hud_agents::replies::{AnswerFix, Unreachable};
 use agent_hud_agents::transcript::live::DesktopAsk;
 
 impl crate::AgentHudCore {
@@ -59,11 +60,14 @@ impl crate::AgentHudCore {
 impl crate::AgentHudCore {
     /// Why Claude's questions are not answered here: the user turned off
     /// "Answer questions" on the Claude Code plugin's row in Settings.
-    pub(crate) fn claude_answers_off(&self) -> Option<String> {
+    pub(crate) fn claude_answers_off(&self) -> Option<Unreachable> {
         (self.settings[REPLIES.setting] == false).then(|| {
-            crate::l10n::text(
-                "在 Agent HUD 里回答 Claude 的提问已关闭（设置 → 智能体 → 智能体插件）。",
-                "Answering Claude's questions in Agent HUD is off (Settings → Agents → Agent plugins).",
+            Unreachable::new(
+                crate::l10n::text(
+                    "在 Agent HUD 里回答 Claude 的提问已关闭（设置 → 智能体插件）。",
+                    "Answering Claude's questions in Agent HUD is off (Settings → Agent plugins).",
+                ),
+                Some(AnswerFix::TurnOnAnswers),
             )
         })
     }
@@ -72,11 +76,18 @@ impl crate::AgentHudCore {
     /// here; Err gives why it can only be answered in the app. An offer's
     /// buttons are the app's own actions, which no words stand for; a box
     /// needs answering on and a host that reaches its session.
-    pub(crate) fn desktop_ask_way(&self, session: &str, ask: &DesktopAsk) -> Result<(), String> {
+    pub(crate) fn desktop_ask_way(
+        &self,
+        session: &str,
+        ask: &DesktopAsk,
+    ) -> Result<(), Unreachable> {
         if ask.kind == "offer" {
-            return Err(crate::l10n::text(
-                "它的按钮只能在 Claude 窗口里用。",
-                "Its buttons work only in Claude's own window.",
+            return Err(Unreachable::new(
+                crate::l10n::text(
+                    "它的按钮只能在 Claude 窗口里用。",
+                    "Its buttons work only in Claude's own window.",
+                ),
+                None,
             ));
         }
         if let Some(off) = self.claude_answers_off() {
@@ -84,9 +95,12 @@ impl crate::AgentHudCore {
         }
         match &self.session_replies {
             Some(replies) => replies.reaches(CLAUDE.id, session),
-            None => Err(crate::l10n::text(
-                "Agent HUD 不能把回答发进 Claude 会话。",
-                "Agent HUD can't send answers into Claude sessions.",
+            None => Err(Unreachable::new(
+                crate::l10n::text(
+                    "Agent HUD 不能把回答发进 Claude 会话。",
+                    "Agent HUD can't send answers into Claude sessions.",
+                ),
+                None,
             )),
         }
     }
@@ -108,7 +122,7 @@ impl crate::AgentHudCore {
         let view = self.requests.checked(id, decision, now)?;
         if let Some(words) = desktop_ask_words(&view, decision) {
             if let Some(off) = self.claude_answers_off() {
-                return Err(off);
+                return Err(off.note);
             }
             let replies = self.session_replies.as_ref().ok_or_else(|| {
                 crate::l10n::text(

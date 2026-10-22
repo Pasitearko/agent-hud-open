@@ -608,6 +608,18 @@ export function HUDScene({
     onEscape: endHold,
   });
 
+  // A card's Open Agent plugins hands over as the settings button does.
+  const openSettingsPage = panelServices?.openSettingsPage;
+  const openSettings = useMemo(
+    () =>
+      openSettingsPage
+        ? (page: string) => {
+            endHold();
+            handoff(() => openSettingsPage(page));
+          }
+        : undefined,
+    [openSettingsPage, endHold, handoff],
+  );
   const eventContent =
     request || event ? (
       <>
@@ -617,6 +629,7 @@ export function HUDScene({
             selected={request}
             select={news.select}
             decide={onRequestDecision}
+            openSettings={openSettings}
             light={light}
             language={snapshotLanguage(snapshot)}
           />

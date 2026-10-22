@@ -363,8 +363,16 @@ export interface Approval {
    * window, such as a Claude desktop box whose session Agent HUD cannot
    * reach; null when it can be answered here. */
   answerNote?: string | null;
+  /** From Core, with `answerNote`: the step that would let Agent HUD answer
+   * it here; null when nothing on this Mac would. */
+  answerFix?: AnswerFix | null;
   answersPlan?: boolean;
 }
+/** What lets Agent HUD answer a client's questions: install the client's
+ * Agent HUD plugin (Settings → Agent plugins), load it in the session that
+ * asks (`/reload-plugins`), or turn answering back on in Settings → Agent
+ * plugins. */
+export type AnswerFix = "installPlugin" | "reloadPlugins" | "turnOnAnswers";
 export type ApprovalWaitMinutes = 1 | 3 | 5 | 10 | 30 | 60;
 export interface ClientHooksStatus {
   supported: boolean;

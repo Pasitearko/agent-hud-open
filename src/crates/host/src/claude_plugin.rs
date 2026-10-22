@@ -42,7 +42,10 @@ impl ClaudePlugin {
 
     /// The HUD's way to answer Claude's questions in a session running the plugin.
     pub(crate) fn replies(&self) -> Arc<dyn SessionReplies> {
-        Arc::new(ClaudeReplies::new(self.channel.clone()))
+        let claude_config = super::mcp_clients::home()
+            .map(|home| plugin::claude_config_directory(&home))
+            .unwrap_or_default();
+        Arc::new(ClaudeReplies::new(self.channel.clone(), claude_config))
     }
 }
 

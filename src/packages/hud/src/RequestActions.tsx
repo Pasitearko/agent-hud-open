@@ -10,6 +10,8 @@ import { cardColumn } from "./card-column";
 export interface RequestActionsProps {
   request: Approval;
   onDecision?: (decision: RequestDecision) => void | Promise<void>;
+  /** Settings, on a page such as "agent-plugins". */
+  onOpenSettings?: (page: string) => void;
   light?: boolean;
   language?: string;
 }
@@ -21,6 +23,7 @@ export interface RequestActionsProps {
 export function RequestActions({
   request,
   onDecision,
+  onOpenSettings,
   light = false,
   language,
 }: RequestActionsProps) {
@@ -82,6 +85,7 @@ export function RequestActions({
           light={light}
           zh={zh}
           answer={answer}
+          openSettings={onOpenSettings}
         />
       ) : isPlan ? (
         <PermissionPlanCard

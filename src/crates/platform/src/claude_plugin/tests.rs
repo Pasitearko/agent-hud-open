@@ -82,7 +82,7 @@ fn a_session_runs_the_plugin_while_it_checks_in() {
 fn the_huds_answer_goes_to_a_loaded_session_and_tidies_what_was_taken() {
     let temp = tempfile::tempdir().unwrap();
     let channel = ClaudeChannel::new(temp.path().to_path_buf());
-    let replies = ClaudeReplies::new(channel.clone());
+    let replies = ClaudeReplies::new(channel.clone(), temp.path().join("claude-config"));
     let now = SystemTime::now();
     assert_eq!(
         channel.hand(SESSION, "Install on my iPhone", now),
@@ -91,6 +91,7 @@ fn the_huds_answer_goes_to_a_loaded_session_and_tidies_what_was_taken() {
     assert!(replies
         .reaches("claude", SESSION)
         .unwrap_err()
+        .note
         .contains("Agent plugins"));
     check_in(&channel, SESSION, br#"{"at":1}"#);
     assert!(replies.reaches("claude", SESSION).is_ok());
@@ -174,4 +175,63 @@ fn words_left_under_an_identity_report_how_they_went() {
         channel.state(SESSION, id, now).unwrap().unwrap().0,
         PromptState::Expired
     );
+}
+
+/// A session the HUD cannot reach says which step would let it answer there:
+/// install the plugin; load it in a session that last checked in before the
+/// install; or open a session the app paused after it ran this install.
+#[test]
+fn an_unreached_session_names_the_step_that_lets_the_hud_answer() {
+    let temp = tempfile::tempdir().unwrap();
+    let channel = ClaudeChannel::new(temp.path().join("channel"));
+    let config = temp.path().join("claude-config");
+    let replies = ClaudeReplies::new(channel.clone(), config.clone());
+    let fix = || replies.reaches("claude", SESSION).unwrap_err().fix;
+    assert_eq!(fix(), Some(AnswerFix::InstallPlugin));
+    assert_eq!(
+        replies.reaches("codex", SESSION).unwrap_err().fix,
+        None,
+        "the plugin is Claude Code's alone"
+    );
+
+    // Installed a minute ago: a session that never checked in has not loaded it.
+    let now = SystemTime::now();
+    let installed =
+        chrono::DateTime::<chrono::Utc>::from(now - Duration::from_secs(60)).to_rfc3339();
+    fs::create_dir_all(config.join("plugins")).unwrap();
+    fs::write(
+        config.join("plugins/installed_plugins.json"),
+        json!({"version": 2, "plugins": {"agent-hud@agent-hud": [
+            {"scope": "user", "installedAt": installed, "lastUpdated": installed}]}})
+        .to_string(),
+    )
+    .unwrap();
+    assert!(installed_at(&config).is_some());
+    assert_eq!(fix(), Some(AnswerFix::ReloadPlugins));
+
+    // Nor has one that last checked in before the install.
+    check_in(&channel, SESSION, br#"{"at":1}"#);
+    let file = channel
+        .directory()
+        .join("sessions")
+        .join(format!("{SESSION}.json"));
+    let checked_in = |seconds_ago: u64| {
+        fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(now - Duration::from_secs(seconds_ago))
+            .unwrap()
+    };
+    checked_in(3_600);
+    assert_eq!(fix(), Some(AnswerFix::ReloadPlugins));
+
+    // It ran this install, then went quiet: the app paused it, and nothing here would change that.
+    checked_in(30);
+    let paused = replies.reaches("claude", SESSION).unwrap_err();
+    assert_eq!(paused.fix, None);
+    assert!(paused.note.contains("paused"), "{}", paused.note);
+
+    checked_in(0);
+    assert!(replies.reaches("claude", SESSION).is_ok());
 }

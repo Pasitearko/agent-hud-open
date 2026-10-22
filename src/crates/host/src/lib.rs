@@ -674,8 +674,14 @@ fn take_settings_page(windows: tauri::State<'_, AuxiliaryWindows>) -> Option<Str
         .and_then(|mut pending| pending.take())
 }
 
+/// Settings, on `page` when the HUD names one, as a card's Open Agent
+/// plugins does.
 #[tauri::command]
-async fn hud_show_main(app: tauri::AppHandle) -> Result<(), String> {
+async fn hud_show_main(app: tauri::AppHandle, page: Option<String>) -> Result<(), String> {
+    if let Some(page) = page {
+        show_settings_page(&app, page);
+        return Ok(());
+    }
     tauri::async_runtime::spawn_blocking(move || show_settings(&app))
         .await
         .map_err(|error| format!("Settings window worker failed: {error}"))?

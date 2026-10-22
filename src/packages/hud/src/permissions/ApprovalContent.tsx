@@ -60,6 +60,7 @@ export function ApprovalContent({
   selected,
   select,
   decide,
+  openSettings,
   light,
   language,
 }: {
@@ -67,6 +68,8 @@ export function ApprovalContent({
   selected: Approval;
   select: (id: string) => void;
   decide?: (id: string, decision: RequestDecision) => void | Promise<void>;
+  /** Settings, on a page such as "agent-plugins", with the HUD put away. */
+  openSettings?: (page: string) => void;
   light: boolean;
   language?: string;
 }) {
@@ -137,6 +140,7 @@ export function ApprovalContent({
                 request={request}
                 light={light}
                 language={language}
+                onOpenSettings={openSettings}
                 onDecision={
                   decide
                     ? (decision) => decide(request.id, decision)

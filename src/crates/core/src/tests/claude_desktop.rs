@@ -193,11 +193,14 @@ struct FakeReplies {
     sent: std::sync::Mutex<Vec<(String, String, String)>>,
 }
 impl replies::SessionReplies for FakeReplies {
-    fn reaches(&self, _source: &str, session: &str) -> Result<(), String> {
+    fn reaches(&self, _source: &str, session: &str) -> Result<(), replies::Unreachable> {
         if self.reached.lock().unwrap().contains(session) {
             Ok(())
         } else {
-            Err("plugin not loaded".into())
+            Err(replies::Unreachable::new(
+                "plugin not loaded".into(),
+                Some(replies::AnswerFix::ReloadPlugins),
+            ))
         }
     }
     fn reply(&self, source: &str, session: &str, words: &str) -> Result<(), String> {
@@ -284,6 +287,8 @@ fn a_claude_desktop_box_is_answered_into_its_session_where_the_host_reaches_it()
         assert!(card["answerNote"]
             .as_str()
             .is_some_and(|note| !note.is_empty()));
+        // Nothing on this Mac would let the public build answer them.
+        assert_eq!(card["answerFix"], Value::Null);
     }
     let shown = cards
         .iter()
@@ -306,6 +311,8 @@ fn a_claude_desktop_box_is_answered_into_its_session_where_the_host_reaches_it()
         .unwrap();
     assert_eq!(card["answersQuestion"], false);
     assert_eq!(card["answerNote"], "plugin not loaded");
+    // With the step that would let it answer, for the HUD and the phone to word.
+    assert_eq!(card["answerFix"], "reloadPlugins");
 
     // Once it reaches the session the box is another card, an answerable one; the offer's buttons are the
     // app's own actions, so it stays display only.
@@ -330,12 +337,15 @@ fn a_claude_desktop_box_is_answered_into_its_session_where_the_host_reaches_it()
         .starts_with("claude-desktop-ask:reply:"));
     assert_eq!(card["answersQuestion"], true);
     assert_eq!(card["answerNote"], Value::Null);
+    assert_eq!(card["answerFix"], Value::Null);
     let offer = cards
         .iter()
         .find(|card| card["sessionId"] == offered)
         .unwrap();
     assert_eq!(offer["answersQuestion"], false);
     assert!(offer["answerNote"].is_string());
+    // Its buttons work only in Claude's window, plugin or not.
+    assert_eq!(offer["answerFix"], Value::Null);
 
     // A session the host stops reaching for a while keeps its answerable card; the answer is refused instead.
     host.reached.lock().unwrap().remove(boxed);
@@ -428,6 +438,7 @@ fn turning_answer_questions_off_makes_a_reached_box_display_only_at_once() {
         note.contains("Agent plugins") || note.contains("智能体插件"),
         "{note}"
     );
+    assert_eq!(cards[0]["answerFix"], "turnOnAnswers");
     let answer =
         json!({"kind": "answer", "answers": {"toolu_box": {"selected": ["Install on my iPhone"]}}});
     assert!(backend

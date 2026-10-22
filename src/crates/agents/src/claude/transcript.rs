@@ -887,14 +887,15 @@ pub fn reworded_desktop_ask(path: &Path, ask: &DesktopAsk) -> Option<DesktopAsk>
 }
 
 /// The card of a question the Claude desktop app asks. `unanswerable` is
-/// why it can only be answered in the app; None for a next-step box the host
-/// can answer, whose answer then goes into its session as words.
+/// why it can only be answered in the app, and the step that would let the
+/// host answer it (`answerFix`); None for a next-step box the host can
+/// answer, whose answer then goes into its session as words.
 pub fn desktop_ask_view(
     req_id: &str,
     session_id: &str,
     cwd: Option<&str>,
     ask: &DesktopAsk,
-    unanswerable: Option<String>,
+    unanswerable: Option<crate::replies::Unreachable>,
 ) -> Value {
     let tool = if ask.kind == "offer" {
         "mcp__ccd_session__start_session"
@@ -944,7 +945,8 @@ pub fn desktop_ask_view(
         "questions": [question],
         "plan": null,
         "answersQuestion": unanswerable.is_none(),
-        "answerNote": unanswerable,
+        "answerNote": unanswerable.as_ref().map(|why| why.note.as_str()),
+        "answerFix": unanswerable.and_then(|why| why.fix).map(|fix| fix.as_str()),
         "answersPlan": false,
     })
 }

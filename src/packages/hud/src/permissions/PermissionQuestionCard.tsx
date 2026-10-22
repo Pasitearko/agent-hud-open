@@ -1,5 +1,12 @@
-import { useEffect, useRef, useState } from "react";
-import { ArrowRight, Check, ChevronLeft, LoaderCircle, X } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  ArrowRight,
+  Check,
+  ChevronLeft,
+  LoaderCircle,
+  Plug,
+  X,
+} from "lucide-react";
 import type {
   Approval,
   RequestAnswer,
@@ -16,8 +23,22 @@ import { cardColumn } from "../card-column";
  * QuestionDraft does. */
 type Draft = RequestAnswer & { own?: boolean };
 
-/** The least room an option's description takes beside its answer before it goes to a line of its own. */
-const OPTION_DESCRIPTION_MIN_WIDTH = 96;
+/** Settings' page for what Agent HUD installs into each client. */
+const AGENT_PLUGINS_PAGE = "agent-plugins";
+/** What loads a newly installed plugin in a running Claude Code session. */
+const RELOAD_COMMAND = "/reload-plugins";
+
+/** `text` with each `command` in it drawn by `code`. */
+function withCommand(
+  text: string,
+  command: string,
+  code: (command: string, key: number) => ReactNode,
+) {
+  const parts = text.split(command);
+  return parts.flatMap((part, index) =>
+    index === 0 ? [part] : [code(command, index), part],
+  );
+}
 
 const drafts = new Map<
   string,
@@ -31,6 +52,7 @@ export function PermissionQuestionCard({
   light = false,
   zh = false,
   answer,
+  openSettings,
 }: {
   request: Approval;
   disabled: boolean;
@@ -38,6 +60,8 @@ export function PermissionQuestionCard({
   light?: boolean;
   zh?: boolean;
   answer: (decision: RequestDecision) => void | Promise<void>;
+  /** Settings, on a page such as "agent-plugins"; without it the card only says where to go. */
+  openSettings?: (page: string) => void;
 }) {
   const t = (en: string, cn: string) => (zh ? cn : en);
   const [answers, setAnswers] = useState<Record<string, Draft>>(
@@ -87,6 +111,21 @@ export function PermissionQuestionCard({
   const signal = alertFill("warning", ground);
   const signalText = alertText("warning", ground);
   const onSignal = onAlertFill(ground);
+  const code = (command: string, key: number) => (
+    <code
+      key={key}
+      style={{
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+        fontSize: 10,
+        padding: "0 4px",
+        borderRadius: 4,
+        background: highlight,
+        color: primary,
+      }}
+    >
+      {command}
+    </code>
+  );
 
   const changeAnswer = (key: string, patch: Partial<Draft>) =>
     setAnswers((previous) => {
@@ -131,6 +170,12 @@ export function PermissionQuestionCard({
   };
 
   if (!canAnswerQuestion) {
+    // Only the question and why it waits for the client: offered answers
+    // that could not be sent would look like buttons that do nothing.
+    const fix = request.answerFix ?? null;
+    const opensPlugins =
+      Boolean(openSettings) &&
+      (fix === "installPlugin" || fix === "turnOnAnswers");
     return (
       <div style={cardColumn(8)}>
         {detailText && (
@@ -160,83 +205,67 @@ export function PermissionQuestionCard({
                 fontSize: 12,
                 fontWeight: 600,
                 color: primary,
+                lineHeight: 1.4,
               }}
             >
               {q.question}
             </div>
-            {q.options.length > 0 && (
-              <div style={cardColumn(3)}>
-                {q.options.map((opt) => (
-                  <div
-                    key={opt.label}
-                    // The answer may be cut at two lines; all of it on hover (Open's `.help`).
-                    title={opt.label}
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      alignItems: "baseline",
-                      columnGap: 6,
-                      rowGap: 2,
-                      padding: "4px 7px",
-                      borderRadius: 5,
-                      background: inset,
-                    }}
-                  >
-                    {/* The answer keeps its own width and wraps only where the row cannot hold it, in two lines
-                        at most (Open's lineLimit(2)); the description takes what is left, or a line of its own
-                        when that is too little to read. Shrunk with it, "All A" broke into "All" over "A". */}
-                    <span
-                      style={{
-                        flexShrink: 0,
-                        maxWidth: "100%",
-                        display: "-webkit-box",
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: "vertical",
-                        overflow: "hidden",
-                        overflowWrap: "anywhere",
-                        fontSize: 11,
-                        fontWeight: 500,
-                        color: text(0.84),
-                      }}
-                    >
-                      {opt.label}
-                    </span>
-                    {/* The description wraps and is shown whole: it is the only place the card says what an answer
-                        does, and cut to one line it lost the part that mattered (a Claude next-step button whose
-                        message ran past the row). Open shows it only on hover. */}
-                    {opt.description && (
-                      <span
-                        style={{
-                          flex: `1 1 ${OPTION_DESCRIPTION_MIN_WIDTH}px`,
-                          minWidth: 0,
-                          fontSize: 10,
-                          lineHeight: 1.35,
-                          color: secondary,
-                          overflowWrap: "anywhere",
-                        }}
-                      >
-                        {opt.description}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         ))}
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {/* Core says why this one can be answered only in the client; without it, a Claude next-step box
-              showed only "Answer in Claude", with nothing to say why its buttons did nothing. */}
-          <span style={{ ...cardColumn(2), minWidth: 0 }}>
-            <span style={{ fontSize: 11, color: secondary }}>
-              {t(`Answer in ${vendor}`, `请到 ${vendor} 里回答`)}
-            </span>
-            {request.answerNote && (
-              <span style={{ fontSize: 10, lineHeight: 1.35, color: tertiary }}>
-                {request.answerNote}
-              </span>
-            )}
+        {/* Core says why this one can be answered only in the client and
+            which step would let Agent HUD answer it: a plugin to install or
+            answering to turn back on opens Settings → Agent plugins; a
+            session that has not loaded the plugin is told the command. */}
+        <div
+          style={{
+            ...cardColumn(3),
+            padding: "7px 8px",
+            borderRadius: 6,
+            background: inset,
+          }}
+        >
+          <span style={{ fontSize: 11, fontWeight: 600, color: primary }}>
+            {t(`Answer in ${vendor}`, `请到 ${vendor} 里回答`)}
           </span>
+          {request.answerNote && (
+            <span
+              style={{
+                fontSize: 10,
+                lineHeight: 1.4,
+                color: secondary,
+                overflowWrap: "anywhere",
+              }}
+            >
+              {fix === "reloadPlugins"
+                ? withCommand(request.answerNote, RELOAD_COMMAND, code)
+                : request.answerNote}
+            </span>
+          )}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {opensPlugins && (
+            <button
+              type="button"
+              onClick={() => openSettings?.(AGENT_PLUGINS_PAGE)}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                height: 22,
+                padding: "0 9px",
+                borderRadius: 6,
+                border: 0,
+                background: allow,
+                color: onAllow,
+                fontSize: 11,
+                fontWeight: 500,
+                cursor: "pointer",
+              }}
+            >
+              <Plug size={9} strokeWidth={2.6} />
+              {t("Open Agent plugins", "打开智能体插件")}
+            </button>
+          )}
           <span style={{ flex: 1, minWidth: 8 }} />
           <button
             type="button"

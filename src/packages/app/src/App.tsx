@@ -546,6 +546,9 @@ function AppContent({
       }
     },
     query: (method, params) => act(method, params),
+    openSettingsPage: (page) => {
+      if (isTauri()) void invoke("hud_show_main", { page });
+    },
     selectSession: (session) => {
       setSelectedSession(session);
       if (isTauri()) {

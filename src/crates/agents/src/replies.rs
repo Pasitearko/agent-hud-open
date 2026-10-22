@@ -9,3 +9,41 @@ pub struct Replies {
     /// off; on unless it is `false`.
     pub setting: &'static str,
 }
+
+/// Why words would not reach a session now: the reason, in the app's
+/// language, and the step that would let Agent HUD answer there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unreachable {
+    pub note: String,
+    /// None when nothing on this Mac would change it, such as a button that
+    /// works only in the client's own window.
+    pub fix: Option<AnswerFix>,
+}
+
+impl Unreachable {
+    pub fn new(note: String, fix: Option<AnswerFix>) -> Self {
+        Self { note, fix }
+    }
+}
+
+/// The step that lets Agent HUD answer a client's questions, as a card names
+/// it (`answerFix`) for the HUD and the phone to word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnswerFix {
+    /// The client's Agent HUD plugin is not installed: Settings → Agent plugins.
+    InstallPlugin,
+    /// Installed, but this session has not loaded it: `/reload-plugins` there.
+    ReloadPlugins,
+    /// The user turned answering off on the plugin's row in Settings → Agent plugins.
+    TurnOnAnswers,
+}
+
+impl AnswerFix {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InstallPlugin => "installPlugin",
+            Self::ReloadPlugins => "reloadPlugins",
+            Self::TurnOnAnswers => "turnOnAnswers",
+        }
+    }
+}
