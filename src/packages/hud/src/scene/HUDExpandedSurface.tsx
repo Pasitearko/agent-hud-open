@@ -255,6 +255,9 @@ export function HUDExpandedSurface({
                   height: "100%",
                   overflow: "visible",
                   pointerEvents: "none",
+                  // A layer of its own. Painted into the window's layer, WebKit does not clear the shadow below the
+                  // shape when it shrinks, and grey bands stay on screen after the panel closes.
+                  willChange: "transform",
                   filter:
                     cardVisible || !config.hasNotch
                       ? "drop-shadow(0 9px 15px #00000022)"
