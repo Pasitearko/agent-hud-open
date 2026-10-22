@@ -60,6 +60,11 @@ pub struct Runtime {
 }
 
 impl Runtime {
+    /// Startup must use the loaded preference rather than wait for a snapshot.
+    pub fn launch_at_login_enabled(&self) -> bool {
+        self.core.launch_at_login_enabled()
+    }
+
     pub fn new(data_dir: Option<PathBuf>) -> Result<Self, String> {
         Self::new_with_accounts(data_dir, true)
     }

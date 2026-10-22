@@ -46,16 +46,27 @@ pub(crate) struct Coordinator {
     notice: Mutex<Option<UpdateNotice>>,
 }
 
+impl Default for Coordinator {
+    fn default() -> Self {
+        Self {
+            pending: Mutex::new(Pending {
+                changed: SCREENS | DISPLAY,
+                ..Pending::default()
+            }),
+            wake: Condvar::new(),
+            directions: Mutex::new(json!({"startedAt": 0, "directions": {}})),
+            notice: Mutex::new(None),
+        }
+    }
+}
+
+/// Prepare the mailbox before extensions or the collector can publish. Its
+/// consumer starts only after the window, display and tray owners are ready.
+pub(crate) fn prepare(app: &tauri::AppHandle) {
+    app.manage(Coordinator::default());
+}
+
 pub(crate) fn start(app: &tauri::AppHandle) -> Result<(), String> {
-    app.manage(Coordinator {
-        pending: Mutex::new(Pending {
-            changed: SCREENS | DISPLAY,
-            ..Pending::default()
-        }),
-        wake: Condvar::new(),
-        directions: Mutex::new(json!({"startedAt": 0, "directions": {}})),
-        notice: Mutex::new(None),
-    });
     let app = app.clone();
     std::thread::Builder::new()
         .name("agenthud-windows".into())
@@ -66,11 +77,27 @@ pub(crate) fn start(app: &tauri::AppHandle) -> Result<(), String> {
 
 fn wake(app: &tauri::AppHandle, changed: u8, update: impl FnOnce(&mut Pending)) {
     if let Some(owner) = app.try_state::<Coordinator>() {
-        if let Ok(mut pending) = owner.pending.lock() {
+        owner.wake(changed, update);
+    }
+}
+
+impl Coordinator {
+    fn wake(&self, changed: u8, update: impl FnOnce(&mut Pending)) {
+        if let Ok(mut pending) = self.pending.lock() {
             pending.changed |= changed;
             update(&mut pending);
-            owner.wake.notify_one();
+            self.wake.notify_one();
         }
+    }
+
+    fn update_notice(&self, notice: Option<UpdateNotice>) {
+        if let Ok(mut shown) = self.notice.lock() {
+            if *shown == notice {
+                return;
+            }
+            *shown = notice;
+        }
+        self.wake(UPDATE, |_| {});
     }
 }
 
@@ -133,13 +160,7 @@ pub(crate) fn update_notice(app: &tauri::AppHandle, notice: Option<UpdateNotice>
     let Some(owner) = app.try_state::<Coordinator>() else {
         return;
     };
-    if let Ok(mut shown) = owner.notice.lock() {
-        if *shown == notice {
-            return;
-        }
-        *shown = notice;
-    }
-    wake(app, UPDATE, |_| {});
+    owner.update_notice(notice);
 }
 
 fn current_notice(app: &tauri::AppHandle) -> Option<UpdateNotice> {
@@ -322,5 +343,34 @@ fn run(app: &tauri::AppHandle) {
                 eprintln!("Agent HUD Next menu bar: {error}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn callbacks_before_the_window_worker_starts_keep_their_initial_facts() {
+        let owner = Coordinator::default();
+        let initial = Arc::new(json!({"settings":{"hudVisible":false},"generatedAt":"first"}));
+        owner.wake(SNAPSHOT, |pending| pending.snapshot = Some(initial));
+        let notice = UpdateNotice {
+            version: "0.7.0".into(),
+            settings_page: "updates".into(),
+        };
+        owner.update_notice(Some(notice.clone()));
+        // A later clock or a repeated version must not downgrade or discard
+        // the first projection before its consumer has taken it.
+        let later = Arc::new(json!({"settings":{"hudVisible":false},"generatedAt":"later"}));
+        owner.wake(CLOCK, |pending| pending.snapshot = Some(later.clone()));
+        owner.update_notice(Some(notice.clone()));
+        let pending = owner.pending.lock().unwrap();
+        assert_eq!(
+            pending.changed & (SCREENS | DISPLAY | SNAPSHOT | UPDATE),
+            SCREENS | DISPLAY | SNAPSHOT | UPDATE
+        );
+        assert_eq!(pending.snapshot.as_ref().unwrap().as_ref(), later.as_ref());
+        assert_eq!(*owner.notice.lock().unwrap(), Some(notice));
     }
 }

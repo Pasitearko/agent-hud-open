@@ -126,6 +126,11 @@ pub struct AgentHudCore {
 }
 
 impl AgentHudCore {
+    /// The loaded preference, available before the first collection pass.
+    pub fn launch_at_login_enabled(&self) -> bool {
+        self.settings["launchAtLogin"] == true
+    }
+
     pub fn new(roots: Vec<SourceRoot>, app_data: PathBuf) -> Self {
         let settings_path = app_data.join("settings.json");
         let stored: Value = fs::read(&settings_path)

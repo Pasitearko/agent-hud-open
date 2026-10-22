@@ -15,6 +15,32 @@ enum ChannelState {
     Listening(Server),
     Failed(String),
 }
+impl ChannelState {
+    fn configure(
+        &mut self,
+        enabled: bool,
+        start: impl FnOnce() -> Result<Server, String>,
+    ) -> Value {
+        if !enabled {
+            *self = Self::Disabled;
+        } else if matches!(*self, Self::Disabled) {
+            *self = match start() {
+                Ok(server) => Self::Listening(server),
+                Err(error) => Self::Failed(error),
+            };
+        }
+        let (listening, notice) = match &*self {
+            Self::Disabled => (false, None),
+            Self::Listening(server) if server.is_listening() => (true, None),
+            Self::Listening(_) => (
+                false,
+                Some("The local tools channel stopped; reopen it in Settings"),
+            ),
+            Self::Failed(error) => (false, Some(error.as_str())),
+        };
+        json!({"supported":local_tools::supported(),"enabled":enabled,"listening":listening,"notice":notice})
+    }
+}
 pub(super) struct ToolsChannel {
     app: tauri::AppHandle,
     backend: Weak<Mutex<Backend>>,
@@ -38,9 +64,7 @@ impl ToolsChannel {
         let Ok(mut state) = self.state.lock() else {
             return json!({"supported":local_tools::supported(),"enabled":enabled,"listening":false,"notice":"Local tools state unavailable"});
         };
-        if !enabled {
-            *state = ChannelState::Disabled;
-        } else if matches!(*state, ChannelState::Disabled) {
+        state.configure(enabled, || {
             let backend = self.backend.clone();
             let app = self.app.clone();
             let handler = Arc::new(move |request: Value, active: &AtomicBool| {
@@ -52,27 +76,30 @@ impl ToolsChannel {
                     }
                 }
             });
-            *state = match Server::start(&self.directory, handler) {
-                Ok(server) => ChannelState::Listening(server),
-                Err(error) => ChannelState::Failed(error),
-            };
-        }
-        let (listening, notice) = match &*state {
-            ChannelState::Disabled => (false, None),
-            ChannelState::Listening(server) if server.is_listening() => (true, None),
-            ChannelState::Listening(_) => (
-                false,
-                Some("The local tools channel stopped; reopen it in Settings"),
-            ),
-            ChannelState::Failed(error) => (false, Some(error.as_str())),
-        };
-        json!({"supported":local_tools::supported(),"enabled":enabled,"listening":listening,"notice":notice})
+            Server::start(&self.directory, handler)
+        })
     }
     pub(super) fn stop(&self) {
         if let Ok(mut state) = self.state.lock() {
             *state = ChannelState::Disabled;
         }
     }
+}
+
+/// A private preference may change its tool switch before returning, including
+/// before a later step fails. Reconcile the shared channel after the call and
+/// preserve the product's own reply. The caller holds no Backend lock here.
+pub(super) fn extension_request(
+    extension: Option<&dyn crate::extension::ProductExtension>,
+    method: &str,
+    params: Value,
+    refresh_tools: impl FnOnce(),
+) -> Result<Value, String> {
+    let result = extension
+        .ok_or("No product extension is installed")?
+        .request(method, params);
+    refresh_tools();
+    result
 }
 fn handle(
     app: &tauri::AppHandle,
@@ -216,6 +243,12 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((method.into(), params.clone()));
+            if method == "set_tools" {
+                self.on.store(params["enabled"] == true, Ordering::Release);
+                if params["fail"] == true {
+                    return Err("A later product step failed".into());
+                }
+            }
             Ok(json!({"method":method,"params":params}))
         }
         fn host_tools_on(&self) -> bool {
@@ -241,6 +274,64 @@ mod tests {
         assert!(channel_wanted(true, Some(&off)));
         on.on.store(false, Ordering::Release);
         assert!(!channel_wanted(false, Some(&on)));
+    }
+
+    #[test]
+    fn product_tool_changes_open_and_close_the_channel_without_a_snapshot() {
+        for failed in [false, true] {
+            let temporary = tempfile::tempdir().unwrap();
+            let product = Arc::new(product(false));
+            let mut state = ChannelState::Disabled;
+            let changed = json!({"enabled":true,"fail":failed});
+            let reply =
+                extension_request(Some(product.as_ref()), "set_tools", changed.clone(), || {
+                    let product_handler = product.clone();
+                    let status =
+                        state.configure(channel_wanted(false, Some(product.as_ref())), || {
+                            Server::start(
+                                temporary.path(),
+                                Arc::new(move |request, _| {
+                                    host_request(
+                                        Some(product_handler.as_ref()),
+                                        request["method"].as_str().unwrap(),
+                                        json!({}),
+                                    )
+                                    .unwrap()
+                                }),
+                            )
+                        });
+                    assert_eq!(status["listening"], true, "{status}");
+                });
+            if failed {
+                assert_eq!(reply.unwrap_err(), "A later product step failed");
+            } else {
+                assert_eq!(
+                    reply.unwrap(),
+                    json!({"method":"set_tools","params":changed})
+                );
+            }
+            // The real temporary IPC channel already answers; no collector
+            // pass, clock deadline or client credential is involved.
+            let tools =
+                local_tools::request(temporary.path(), &json!({"method":"host_tools"})).unwrap();
+            assert_eq!(tools["method"], "host_tools");
+            extension_request(
+                Some(product.as_ref()),
+                "set_tools",
+                json!({"enabled":false}),
+                || {
+                    let status = state
+                        .configure(channel_wanted(false, Some(product.as_ref())), || {
+                            panic!("turning the channel off starts no listener")
+                        });
+                    assert_eq!(status["listening"], false);
+                },
+            )
+            .unwrap();
+            assert!(
+                local_tools::request(temporary.path(), &json!({"method":"host_tools"})).is_err()
+            );
+        }
     }
 
     #[test]

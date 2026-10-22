@@ -97,6 +97,27 @@ impl Backend {
         }
     }
 
+    /// Product tool switches are independent of Core's snapshot revisions.
+    /// Apply one immediately after a product request, even on a quiet ledger.
+    fn refresh_tools(&mut self, app: &tauri::AppHandle) {
+        let Some(tools) = &self.tools else {
+            return;
+        };
+        let wanted = tools::channel_wanted(
+            self.snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot["settings"]["hudTools"] == true),
+            self.extension.as_deref(),
+        );
+        let channel = tools.configure(wanted);
+        if let Some(snapshot) = &mut self.snapshot {
+            if snapshot["connection"]["localTools"] != channel {
+                Arc::make_mut(snapshot)["connection"]["localTools"] = channel;
+                self.publish_snapshot(app);
+            }
+        }
+    }
+
     fn request(
         &mut self,
         app: &tauri::AppHandle,
@@ -471,7 +492,18 @@ async fn native_request(
     let collection = Arc::clone(&service.collection);
     let wake = Arc::clone(&service.wake);
     tauri::async_runtime::spawn_blocking(move || {
-        if method=="extension" {return extension.as_ref().ok_or("No product extension is installed")?.request(params["method"].as_str().ok_or("Extension method is required")?,params.get("params").cloned().unwrap_or(Value::Null));}
+        if method == "extension" {
+            return tools::extension_request(
+                extension.as_deref(),
+                params["method"].as_str().ok_or("Extension method is required")?,
+                params.get("params").cloned().unwrap_or(Value::Null),
+                || {
+                    if let Ok(mut backend) = backend.lock() {
+                        backend.refresh_tools(&app);
+                    }
+                },
+            );
+        }
         let mut params=params;
         // The demo never reaches outside its own folder: no login item, no
         // client's hooks.
@@ -816,12 +848,6 @@ pub fn run_with_options(
             coordinator::open_update,
         ])
         .setup(move |app| {
-            // Kept for the life of the app; the system lets go of the lock at
-            // exit. A second launch of this executable brings Settings forward.
-            if let Some(lock) = instance {
-                let handle = app.handle().clone();
-                app.manage(lock.listen(Arc::new(move || show(&handle))));
-            }
             app.manage(system::System::default());
             app.manage(mcp_clients::Clients::default());
             app.manage(claude_plugin::ClaudePlugin::new(
@@ -849,6 +875,7 @@ pub fn run_with_options(
                 presentation.seed_if_absent(value)?;
             }
             app.manage(presentation);
+            coordinator::prepare(app.handle());
             if let Some(product) = &extension {
                 product.setup_native(app.handle())?;
             }
@@ -870,22 +897,13 @@ pub fn run_with_options(
                 if let Some(path) = &options.canonical_executable {
                     runtime.delegate_hook_owner(path.clone())?;
                 }
+                let launch_at_login = runtime.launch_at_login_enabled();
                 let service = Service::start(
                     app.handle().clone(),
                     runtime,
                     extension.clone(),
                     agent_hud_runtime::local_tools_directory()?,
                 )?;
-                let launch_at_login = service
-                    .backend
-                    .lock()
-                    .ok()
-                    .and_then(|b| {
-                        b.snapshot
-                            .as_ref()
-                            .and_then(|s| s["settings"]["launchAtLogin"].as_bool())
-                    })
-                    .unwrap_or(true);
                 if launch_at_login {
                     app.state::<system::System>().register_if_never_registered();
                 }
@@ -898,6 +916,12 @@ pub fn run_with_options(
             screens::install(app)?;
             shell::install(app.handle());
             coordinator::start(app.handle())?;
+            // Keep the claimed lock throughout setup, but accept handovers
+            // only once Settings and every command owner can answer them.
+            if let Some(lock) = instance {
+                let handle = app.handle().clone();
+                app.manage(lock.listen(Arc::new(move || show(&handle))));
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
