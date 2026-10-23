@@ -27,7 +27,24 @@ fn login() -> Value {
         return json!({"supported":false,"enabled":false,"status":"unavailable","notice":"Launch at login requires a real app bundle on macOS 13 or later."});
     };
     let status: isize = unsafe { msg_send![&*service, status] };
-    json!({"supported":true,"enabled":status==1,"status":match status {1=>"enabled",2=>"requires-approval",0=>"disabled",_=>"unavailable"},"notice":if status==2 {Some("Approve Agent HUD Next in System Settings → General → Login Items.")}else if status==3 {Some("The login service was not found in this app bundle.")}else{None}})
+    let notice = match status {
+        2 => Some(format!(
+            "Approve {} in System Settings → General → Login Items.",
+            app_name()
+        )),
+        3 => Some("The login service was not found in this app bundle.".to_owned()),
+        _ => None,
+    };
+    json!({"supported":true,"enabled":status==1,"status":match status {1=>"enabled",2=>"requires-approval",0=>"disabled",_=>"unavailable"},"notice":notice})
+}
+/// The name Login Items lists: this app bundle's own, so each build says its own.
+fn app_name() -> String {
+    let path = NSBundle::mainBundle().bundlePath().to_string();
+    Path::new(&path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("Agent HUD")
+        .to_owned()
 }
 /// Returns whether the login item status may have changed.
 pub(super) fn register_if_never_registered() -> bool {
