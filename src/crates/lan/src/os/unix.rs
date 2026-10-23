@@ -63,6 +63,31 @@ pub(crate) fn wait(listener: &TcpListener, waiter: &Waiter) -> Wait {
 /// Up, non-loopback IPv4 addresses of Ethernet/Wi-Fi (`en*`) interfaces first,
 /// then bridges.
 pub(crate) fn addresses() -> Vec<String> {
+    let mut rows: Vec<_> = interfaces()
+        .into_iter()
+        .filter(|(name, _)| name.starts_with("en") || name.starts_with("bridge"))
+        .map(|(name, ip)| (!name.starts_with("en"), name, ip.to_string()))
+        .collect();
+    rows.sort();
+    rows.into_iter().map(|(_, _, ip)| ip).collect()
+}
+
+/// Tunnel addresses in the overlay range: Tailscale's `utun*` on macOS,
+/// `tailscale*` on Linux. A proxy's tunnel (198.18.0.0/15) is not one.
+pub(crate) fn overlay_addresses() -> Vec<String> {
+    let mut rows: Vec<_> = interfaces()
+        .into_iter()
+        .filter(|(name, ip)| {
+            (name.starts_with("utun") || name.starts_with("tailscale")) && super::overlay(*ip)
+        })
+        .map(|(name, ip)| (name, ip.to_string()))
+        .collect();
+    rows.sort();
+    rows.into_iter().map(|(_, ip)| ip).collect()
+}
+
+/// Up, non-loopback IPv4 addresses with their interface names.
+fn interfaces() -> Vec<(String, std::net::Ipv4Addr)> {
     unsafe {
         let mut first = std::ptr::null_mut();
         if libc::getifaddrs(&mut first) != 0 {
@@ -77,19 +102,16 @@ pub(crate) fn addresses() -> Vec<String> {
                 && entry.ifa_flags as i32 & libc::IFF_LOOPBACK == 0
             {
                 let name = std::ffi::CStr::from_ptr(entry.ifa_name).to_string_lossy();
-                if name.starts_with("en") || name.starts_with("bridge") {
-                    let addr = &*(entry.ifa_addr as *const libc::sockaddr_in);
-                    let ip = std::net::Ipv4Addr::from(addr.sin_addr.s_addr.to_ne_bytes());
-                    if !ip.is_loopback() && !ip.is_unspecified() {
-                        rows.push((!name.starts_with("en"), name.into_owned(), ip.to_string()));
-                    }
+                let addr = &*(entry.ifa_addr as *const libc::sockaddr_in);
+                let ip = std::net::Ipv4Addr::from(addr.sin_addr.s_addr.to_ne_bytes());
+                if !ip.is_loopback() && !ip.is_unspecified() {
+                    rows.push((name.into_owned(), ip));
                 }
             }
             at = entry.ifa_next;
         }
         libc::freeifaddrs(first);
-        rows.sort();
-        rows.into_iter().map(|(_, _, ip)| ip).collect()
+        rows
     }
 }
 

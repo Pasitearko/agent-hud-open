@@ -61,6 +61,27 @@ pub(crate) fn wait(_listener: &TcpListener, _waiter: &Waiter) -> Wait {
 }
 
 pub(crate) fn addresses() -> Vec<String> {
+    adapters()
+        .into_iter()
+        .map(|(_, ip)| ip.to_string())
+        .collect()
+}
+
+/// Tunnel adapters' addresses in the overlay range, such as Tailscale's.
+pub(crate) fn overlay_addresses() -> Vec<String> {
+    overlay_only(adapters())
+}
+
+fn overlay_only(rows: Vec<((bool, u32), Ipv4Addr)>) -> Vec<String> {
+    rows.into_iter()
+        .filter(|((tunnel, _), ip)| *tunnel && super::overlay(*ip))
+        .map(|(_, ip)| ip.to_string())
+        .collect()
+}
+
+/// IPv4 addresses ranked Ethernet/Wi-Fi first, then by interface metric. The
+/// rank's flag is true for any other adapter type.
+fn adapters() -> Vec<((bool, u32), Ipv4Addr)> {
     // Microsoft recommends a 15 KB initial buffer. A changing adapter list can
     // require another call; u64 storage preserves the native structs' alignment.
     let mut size = 15_000u32;
@@ -86,7 +107,9 @@ pub(crate) fn addresses() -> Vec<String> {
     Vec::new()
 }
 
-unsafe fn collect_addresses(mut at: *const IP_ADAPTER_ADDRESSES_LH) -> Vec<String> {
+unsafe fn collect_addresses(
+    mut at: *const IP_ADAPTER_ADDRESSES_LH,
+) -> Vec<((bool, u32), Ipv4Addr)> {
     let mut rows = BTreeMap::new();
     while let Some(adapter) = unsafe { at.as_ref() } {
         if adapter.OperStatus == IfOperStatusUp && adapter.IfType != IF_TYPE_SOFTWARE_LOOPBACK {
@@ -122,7 +145,7 @@ unsafe fn collect_addresses(mut at: *const IP_ADAPTER_ADDRESSES_LH) -> Vec<Strin
     }
     let mut rows: Vec<_> = rows.into_iter().map(|(ip, rank)| (rank, ip)).collect();
     rows.sort_unstable();
-    rows.into_iter().map(|(_, ip)| ip.to_string()).collect()
+    rows
 }
 
 struct Local(*mut c_void);
@@ -295,6 +318,7 @@ mod tests {
             [192, 168, 1, 9],
             [127, 0, 0, 1],
             [10, 0, 0, 8],
+            [100, 69, 88, 16],
         ]
         .map(|bytes| {
             let mut socket = SOCKADDR_IN {
@@ -327,14 +351,21 @@ mod tests {
         for index in 0..adapters.len() - 1 {
             adapters[index].Next = &mut adapters[index + 1];
         }
+        let ips = |rows: Vec<((bool, u32), Ipv4Addr)>| {
+            rows.into_iter()
+                .map(|(_, ip)| ip.to_string())
+                .collect::<Vec<_>>()
+        };
+        let rows = unsafe { collect_addresses(adapters.as_ptr()) };
         assert_eq!(
-            unsafe { collect_addresses(adapters.as_ptr()) },
-            ["192.168.1.9", "10.0.0.8"]
+            ips(rows.clone()),
+            ["192.168.1.9", "10.0.0.8", "100.69.88.16"]
         );
+        assert_eq!(overlay_only(rows), ["100.69.88.16"]);
         adapters[1].OperStatus = 2; // IfOperStatusDown
         assert_eq!(
-            unsafe { collect_addresses(adapters.as_ptr()) },
-            ["10.0.0.8"]
+            ips(unsafe { collect_addresses(adapters.as_ptr()) }),
+            ["10.0.0.8", "100.69.88.16"]
         );
     }
 

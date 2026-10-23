@@ -43,6 +43,8 @@ struct Shared<R> {
     cache: Arc<Mutex<SnapshotCache<R>>>,
     identity: Identity,
     endpoint: Mutex<Option<String>>,
+    /// Overlay (Tailscale) endpoints a phone may try after `endpoint`.
+    alternates: Mutex<Vec<String>>,
     peers: Mutex<BTreeMap<String, Peer>>,
     streams: Mutex<BTreeMap<String, usize>>,
     sockets: Mutex<BTreeMap<u64, TcpStream>>,
@@ -74,6 +76,7 @@ impl<R: Record + Send + 'static> LanServer<R> {
                 cache,
                 identity,
                 endpoint: Mutex::new(None),
+                alternates: Mutex::new(Vec::new()),
                 peers: Mutex::new(BTreeMap::new()),
                 streams: Mutex::new(BTreeMap::new()),
                 sockets: Mutex::new(BTreeMap::new()),
@@ -157,21 +160,32 @@ impl<R: Record + Send + 'static> LanServer<R> {
         Ok(port)
     }
     pub fn refresh_address(&self) -> bool {
-        let endpoint = self.port.and_then(|port| {
-            crate::os::addresses()
-                .first()
-                .map(|host| format!("https://{host}:{port}"))
-        });
-        self.set_endpoint(endpoint)
+        let (endpoint, alternates) = match self.port {
+            Some(port) => endpoints(
+                &crate::os::addresses(),
+                &crate::os::overlay_addresses(),
+                port,
+            ),
+            None => (None, Vec::new()),
+        };
+        self.set_endpoints(endpoint, alternates)
     }
-    fn set_endpoint(&self, endpoint: Option<String>) -> bool {
+    /// One address set: a change to either part replaces both and retires the
+    /// pairing codes that carried the old set.
+    fn set_endpoints(&self, endpoint: Option<String>, alternates: Vec<String>) -> bool {
         let mut current = self
             .shared
             .endpoint
             .lock()
             .unwrap_or_else(|p| p.into_inner());
-        if *current != endpoint {
+        let mut others = self
+            .shared
+            .alternates
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if *current != endpoint || *others != alternates {
             *current = endpoint;
+            *others = alternates;
             self.shared
                 .credentials
                 .lock()
@@ -206,6 +220,11 @@ impl<R: Record + Send + 'static> LanServer<R> {
             .endpoint
             .lock()
             .unwrap_or_else(|p| p.into_inner()) = None;
+        self.shared
+            .alternates
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
         let mut credentials = self
             .shared
             .credentials
@@ -275,9 +294,10 @@ impl<R: Record + Send + 'static> LanServer<R> {
             .automatic_credential()
             .map(str::to_owned);
         match (token, endpoint) {
-            (Some(token), Some(endpoint)) => Some(
+            (Some(token), Some(endpoint)) => Some(with_alternates(
                 json!({"endpoint":endpoint,"certificateSHA256":self.shared.identity.fingerprint,"token":token}),
-            ),
+                &self.shared,
+            )),
             _ => None,
         }
     }
@@ -299,7 +319,10 @@ impl<R: Record + Send + 'static> LanServer<R> {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .invite(now);
-        let invitation = json!({"schemaVersion":1,"deviceID":self.shared.device,"deviceName":self.shared.name,"endpoint":endpoint,"certificateSHA256":self.shared.identity.fingerprint,"token":token,"expiresAtMs":expires});
+        let invitation = with_alternates(
+            json!({"schemaVersion":1,"deviceID":self.shared.device,"deviceName":self.shared.name,"endpoint":endpoint,"certificateSHA256":self.shared.identity.fingerprint,"token":token,"expiresAtMs":expires}),
+            &self.shared,
+        );
         let bytes = serde_json::to_vec(&invitation).map_err(|_| "Pairing invitation encoding")?;
         let uri = format!(
             "agenthud://pair?payload={}",
@@ -331,7 +354,10 @@ impl<R: Record + Send + 'static> LanServer<R> {
                 .cmp(&a.online)
                 .then_with(|| b.last_seen_ms.cmp(&a.last_seen_ms))
         });
-        json!({"enabled":self.port.is_some(),"port":self.port,"endpoint":*self.shared.endpoint.lock().unwrap_or_else(|p|p.into_inner()),"pairedClients":self.shared.credentials.lock().unwrap_or_else(|p|p.into_inner()).count(),"peers":peers})
+        with_alternates(
+            json!({"enabled":self.port.is_some(),"port":self.port,"endpoint":*self.shared.endpoint.lock().unwrap_or_else(|p|p.into_inner()),"pairedClients":self.shared.credentials.lock().unwrap_or_else(|p|p.into_inner()).count(),"peers":peers}),
+            &self.shared,
+        )
     }
     fn disconnect(&self) {
         self.shared.generation.fetch_add(1, Ordering::AcqRel);
@@ -370,6 +396,35 @@ mod tests;
 fn now() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
+/// The LAN address leads; overlay addresses follow it, or lead when the Mac has
+/// no LAN address. Each address appears once.
+fn endpoints(lan: &[String], overlay: &[String], port: u16) -> (Option<String>, Vec<String>) {
+    let mut hosts: Vec<&String> = lan.iter().take(1).collect();
+    for host in overlay {
+        if !hosts.contains(&host) {
+            hosts.push(host);
+        }
+    }
+    let mut all = hosts
+        .into_iter()
+        .map(|host| format!("https://{host}:{port}"));
+    (all.next(), all.collect())
+}
+
+/// Adds `alternateEndpoints` only when there are any, so a Mac without an
+/// overlay network sends the same bytes as before.
+fn with_alternates<R>(mut value: Value, shared: &Shared<R>) -> Value {
+    let alternates = shared
+        .alternates
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone();
+    if !alternates.is_empty() {
+        value["alternateEndpoints"] = json!(alternates);
+    }
+    value
+}
+
 fn connection<R: Record>(shared: &Shared<R>, socket: TcpStream, address: SocketAddr) -> Result<()> {
     socket
         .set_nonblocking(false)
@@ -472,7 +527,11 @@ fn connection<R: Record>(shared: &Shared<R>, socket: TcpStream, address: SocketA
         {
             remember_peer(shared, &request, address, &authorization, false);
         }
-        let body=serde_json::to_vec(&json!({"deviceID":shared.device,"deviceName":shared.name,"endpoint":endpoint,"certificateSHA256":shared.identity.fingerprint,"token":token})).map_err(|_|"LAN pair encoding")?;
+        let body = serde_json::to_vec(&with_alternates(
+            json!({"deviceID":shared.device,"deviceName":shared.name,"endpoint":endpoint,"certificateSHA256":shared.identity.fingerprint,"token":token}),
+            shared,
+        ))
+        .map_err(|_| "LAN pair encoding")?;
         return reply(200, &[("Content-Type", "application/json".into())], &body);
     }
     let Some(token) = request.bearer() else {

@@ -79,20 +79,63 @@ fn connection_projection_follows_address_and_account_without_stale_cache() {
         Arc::new(|_, _| Ok(None)),
     );
     assert!(server.set_account(Some("first-account")).unwrap().is_none());
-    assert!(server.set_endpoint(Some("https://192.0.2.1:1234".into())));
+    assert!(server.set_endpoints(Some("https://192.0.2.1:1234".into()), vec![]));
     let first = server.local_connection().unwrap();
-    assert!(!server.set_endpoint(Some("https://192.0.2.1:1234".into())));
-    assert!(server.set_endpoint(Some("https://192.0.2.2:1234".into())));
+    assert!(first.get("alternateEndpoints").is_none());
+    assert!(!server.set_endpoints(Some("https://192.0.2.1:1234".into()), vec![]));
+    assert!(server.set_endpoints(Some("https://192.0.2.2:1234".into()), vec![]));
     let connection = server.local_connection().unwrap();
     assert_eq!(connection["endpoint"], "https://192.0.2.2:1234");
     assert_eq!(connection["token"], first["token"]);
-    assert!(server.set_endpoint(None));
+    // An overlay address coming or going is a change of its own.
+    let tailnet = vec!["https://100.69.88.16:1234".to_string()];
+    assert!(server.set_endpoints(Some("https://192.0.2.2:1234".into()), tailnet.clone()));
+    assert!(!server.set_endpoints(Some("https://192.0.2.2:1234".into()), tailnet.clone()));
+    assert_eq!(
+        server.local_connection().unwrap()["alternateEndpoints"],
+        json!(["https://100.69.88.16:1234"])
+    );
+    assert_eq!(
+        server.status()["alternateEndpoints"],
+        json!(["https://100.69.88.16:1234"])
+    );
+    assert!(server.set_endpoints(Some("https://192.0.2.2:1234".into()), vec![]));
+    assert!(server
+        .local_connection()
+        .unwrap()
+        .get("alternateEndpoints")
+        .is_none());
+    assert!(server.set_endpoints(None, vec![]));
     assert!(server.local_connection().is_none());
-    assert!(server.set_endpoint(Some("https://192.0.2.3:1234".into())));
+    assert!(server.set_endpoints(Some("https://192.0.2.3:1234".into()), vec![]));
     assert_eq!(server.local_connection().unwrap()["token"], first["token"]);
     server.set_account(None).unwrap();
     assert!(server.local_connection().is_none());
     let other = server.set_account(Some("second-account")).unwrap().unwrap();
     assert_ne!(other["token"], first["token"]);
     assert_eq!(other["endpoint"], "https://192.0.2.3:1234");
+}
+
+#[test]
+fn the_lan_address_leads_and_overlay_addresses_follow_once() {
+    let lan = vec!["192.168.1.19".to_string(), "192.168.2.4".to_string()];
+    let overlay = vec!["100.69.88.16".to_string()];
+    assert_eq!(
+        endpoints(&lan, &overlay, 52724),
+        (
+            Some("https://192.168.1.19:52724".into()),
+            vec!["https://100.69.88.16:52724".into()]
+        )
+    );
+    // Without a LAN address the overlay address leads; Windows lists it in both.
+    assert_eq!(
+        endpoints(&[], &overlay, 52724),
+        (Some("https://100.69.88.16:52724".into()), vec![])
+    );
+    assert_eq!(
+        endpoints(&overlay, &overlay, 52724),
+        (Some("https://100.69.88.16:52724".into()), vec![])
+    );
+    assert_eq!(endpoints(&lan, &[], 52724).1, Vec::<String>::new());
+    assert_eq!(endpoints(&[], &[], 52724), (None, vec![]));
 }
