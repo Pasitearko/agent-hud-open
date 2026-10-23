@@ -8,6 +8,7 @@ export {
   dimensionsLabel,
   freshKinds,
   Heading,
+  IndexingProgress,
   integer,
   kindLabel,
   kindLabels,

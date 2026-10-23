@@ -16,6 +16,7 @@ mod billing_metrics;
 mod clients;
 mod compressed;
 mod conversation;
+mod data_version;
 mod database;
 pub mod demo;
 mod discovery;
@@ -46,7 +47,9 @@ pub(crate) use agent_hud_agents::claude::jobs as claude_jobs;
 pub use agent_hud_agents::grok::cache as grok_cache;
 pub(crate) use agent_hud_agents::transcript::live as live_facts;
 pub use agent_hud_agents::{naming, protobuf};
-pub(crate) use agent_hud_agents::{LiveLog, Log, TimelineBucket, Usage, PARSER_VERSION};
+pub(crate) use agent_hud_agents::{
+    LiveLog, Log, TimelineBucket, Usage, DATA_VERSION, PARSER_VERSION,
+};
 pub use agent_hud_l10n as l10n;
 pub(crate) use database::{
     checkpoints::{self, LogHead, ParserCache},
@@ -99,6 +102,13 @@ pub struct AgentHudCore {
     projection_sources: u64,
     database: Option<Connection>,
     storage_issue: Option<String>,
+    /// The data version the ledger records (`data_version`).
+    data_version: Option<String>,
+    /// Why the ledger is being read through, until it has been.
+    indexing_run: Option<data_version::Run>,
+    /// Whether a pass has listed every log since launch, so that nothing
+    /// waiting means the ledger has been read through.
+    listed_once: bool,
     discovery: Vec<ProviderDiscovery>,
     reads: ingestion::Reads,
     usage_projection: Option<UsageProjection>,
@@ -162,6 +172,10 @@ impl AgentHudCore {
                 )),
             ),
         };
+        let recorded = database.as_ref().and_then(data_version::recorded);
+        let indexing_run = database.as_ref().and_then(|_| {
+            data_version::run_at_launch(recorded.as_deref(), &logs, Utc::now().timestamp_millis())
+        });
         let requests = requests::Requests::default();
         requests.set_hold_ms(
             settings["approvalWaitMinutes"]
@@ -199,6 +213,9 @@ impl AgentHudCore {
             projection_sources: 0,
             database,
             storage_issue,
+            data_version: recorded,
+            indexing_run,
+            listed_once: false,
             discovery: Vec::new(),
             reads: Default::default(),
             usage_projection: None,

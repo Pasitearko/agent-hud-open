@@ -5,6 +5,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
+import type { IndexingText } from "@agent-hud/ui/text/indexing";
 import type {
   StatisticsCost,
   StatisticsCoverage,
@@ -237,6 +238,59 @@ export function Coverage({
           ? ` 暂不可用：${coverage.unavailableProviders.join("、")}。`
           : ` Unavailable: ${coverage.unavailableProviders.join(", ")}.`
         : ""}
+    </div>
+  );
+}
+
+/** While the usage ledger is read through, in place of the coverage note:
+ * what runs, a bar of how far, and that totals are incomplete meanwhile. */
+export function IndexingProgress({
+  text,
+  theme,
+}: {
+  text: IndexingText;
+  theme: StatsTheme;
+}) {
+  return (
+    <div
+      role="status"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        padding: "0 16px",
+      }}
+    >
+      <span style={{ fontSize: 13, fontWeight: 600 }}>{text.title}</span>
+      <span
+        role="progressbar"
+        aria-label={text.title}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.floor(text.fraction * 100)}
+        style={{
+          position: "relative",
+          height: 5,
+          background: theme.track,
+          borderRadius: 3,
+          overflow: "hidden",
+        }}
+      >
+        <i
+          style={{
+            position: "absolute",
+            inset: "0 auto 0 0",
+            display: "block",
+            width: `${text.fraction * 100}%`,
+            borderRadius: 3,
+            background: theme.light ? "#007aff" : "#0a84ff",
+            transition: "width 600ms ease-out",
+          }}
+        />
+      </span>
+      <span style={{ color: theme.secondary, fontSize: 11 }}>
+        {text.detail}
+      </span>
     </div>
   );
 }

@@ -37,6 +37,10 @@ pub(crate) fn schema(db: &Connection) -> rusqlite::Result<()> {
             head TEXT,
             updated_at_ms INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS ingestion_meta(
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        ) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS session_mapping(
             source TEXT NOT NULL,
             session_id TEXT NOT NULL,

@@ -55,6 +55,7 @@ impl crate::AgentHudCore {
         if previous_pending != self.reads.pending.len() {
             self.usage_projection = None;
         }
+        self.finish_indexing_run();
         let remaining = self.waiting_reads();
         // Claude Desktop's archive and tabs are read every pass, as Open does,
         // so archiving a session there needs no log change to show.
@@ -216,11 +217,17 @@ impl crate::AgentHudCore {
         let pending_meter = self.pending_meter_bounds();
         // Pausing a failed read stops the indexing timer, but does not make
         // its unread history complete. Consumers use this fact, not notices.
+        let (bytes_done, bytes_total) =
+            data_version::progress(&self.reads.listing.files, &self.logs, now);
         let indexing = json!({
             "complete": self.database.is_some()
                 && self.storage_issue.is_none()
                 && self.reads.pending.is_empty(),
             "pending": self.reads.pending.len(),
+            "kind": self.indexing_run.map(data_version::Run::name),
+            "dataVersion": crate::DATA_VERSION,
+            "bytesDone": bytes_done,
+            "bytesTotal": bytes_total,
         });
         let quotas = self.quota_rows(at, now, &pending_meter);
         let billing = self.billing_rows(at, &pending_meter);

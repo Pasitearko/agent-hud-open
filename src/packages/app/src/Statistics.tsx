@@ -31,6 +31,7 @@ import {
   ActivityHeatmap,
   APIBillingCard,
   Coverage,
+  IndexingProgress,
   Heading,
   ProviderCard,
   RecentUsage,
@@ -51,6 +52,7 @@ import {
   type StatsTheme,
 } from "./StatisticsParts";
 import { snapshotLanguage, systemTimeZone } from "@agent-hud/ui/format";
+import { indexingText } from "@agent-hud/ui/text/indexing";
 
 interface StatisticsProps {
   snapshot: Snapshot;
@@ -267,6 +269,7 @@ export default function Statistics({
   const end = useStatisticsEnd(revision, refresh, active);
   const timeZone = useMemo(systemTimeZone, []);
   const zh = snapshotLanguage(snapshot) === "zh";
+  const indexing = indexingText(snapshot.indexing, zh ? "zh" : "en");
   const t = (en: string, cn: string) => (zh ? cn : en);
   // The window's look (with Match screen on, its screen's), not the Appearance
   // setting alone, so the page, the toolbar and the hover cards drawn outside
@@ -573,7 +576,11 @@ export default function Statistics({
           </Button>
         </div>
       )}
-      {data && <Coverage coverage={data.coverage} theme={theme} />}
+      {indexing ? (
+        <IndexingProgress text={indexing} theme={theme} />
+      ) : (
+        data && <Coverage coverage={data.coverage} theme={theme} />
+      )}
       <div
         className="statistics-consumption"
         style={{ padding: "6px 16px 8px", minWidth: 0 }}

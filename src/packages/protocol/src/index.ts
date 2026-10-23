@@ -7,6 +7,22 @@ export type Page =
   | "settings"
   | "migration";
 export type SessionState = "running" | "waiting" | "idle" | "unverified";
+/**
+ * How far the usage ledger has been read. `kind` is set while the ledger is
+ * read through: "first" for a ledger with no logs yet, "reindex" for one
+ * read under another data version (the release whose reading rules it holds,
+ * such as "0.6.0"). Bytes count the logs the 31-day retention keeps, decoded
+ * text for compressed logs.
+ */
+export interface IndexingStatus {
+  complete: boolean;
+  pending: number;
+  kind?: "first" | "reindex" | null;
+  dataVersion?: string;
+  bytesDone?: number;
+  bytesTotal?: number;
+}
+
 export interface TokenTotals {
   input: number;
   output: number;
@@ -527,7 +543,7 @@ export interface Snapshot {
   /** The broadcast contains HUD-relevant sessions; history is queried separately. */
   sessionScope?: "recent";
   /** Unread history stays incomplete even while a failed read is paused. */
-  indexing?: { complete: boolean; pending: number };
+  indexing?: IndexingStatus;
   mode: "live" | "demo";
   connection: {
     status: "connected" | "disconnected" | "loading";

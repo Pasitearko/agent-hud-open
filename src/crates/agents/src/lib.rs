@@ -31,7 +31,8 @@ pub use location::{everywhere, Base, Location, Places, Source};
 pub use os::{Os, PerOs, Support};
 pub use replies::Replies;
 pub use transcript::{
-    number, LiveLog, Log, RecentCall, TimelineBucket, Usage, MAX_TURNS, PARSER_VERSION,
+    number, LiveLog, Log, RecentCall, TimelineBucket, Usage, DATA_VERSION, DATA_VERSIONS,
+    MAX_TURNS, PARSER_VERSION,
 };
 
 // One folder per client, or per family of clients that share a format.

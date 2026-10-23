@@ -19,19 +19,29 @@ pub use usage::{number, TimelineBucket, Usage};
 
 pub const MAX_TURNS: usize = 128;
 
-/// 5: logs keep the client that drives the session (Claude Code's
-/// entrypoint, the Codex rollout's source and originator).
-/// 6: the ledger keeps each log's prompt and compaction marks, the tools
-/// each Claude Code or Codex call asked for, and the context window Codex
-/// reports; logs are read once more to fill them in.
-/// 7: Claude Code calls keep their thinking tokens as reasoning, count lines
-/// without a message id by request id or offset, and the session's model is
-/// the one with the most output; logs are read once more to recount them.
-/// 8: a Claude Code turn is named by its prompt id, the id Claude Code's
-/// hooks report, and the request copies it writes are neither prompts nor
-/// messages; logs are read once more so the turn a checkpoint holds takes
-/// that name too.
-pub const PARSER_VERSION: u32 = 8;
+/// Each data version and the reading rules it names, oldest first.
+///
+/// A data version is the release in which the way logs are read last
+/// changed: 0.6.5 when 0.6.5 reads them differently, and 0.6.5 still while
+/// 0.7.0 reads them the same way. The ledger records it; a log a checkpoint
+/// holds under other rules is read once more while it is within the
+/// retention, and what older or removed logs counted stays. To change how
+/// logs are read, add a row named after the release that ships it (a build
+/// before that release uses `-dev.1`, `-dev.2`…), never edit a row.
+///
+/// The rules before data versions: 5 kept the client that drives a session;
+/// 6 kept each log's prompt and compaction marks, the tools each call asked
+/// for and Codex's context window; 7 kept Claude Code's thinking tokens as
+/// reasoning, counted lines without a message id by request id or offset,
+/// and took the session's model from the most output.
+pub const DATA_VERSIONS: &[(&str, u32)] = &[("0.6.0", 7)];
+
+/// The data version this build reads logs by.
+pub const DATA_VERSION: &str = DATA_VERSIONS[DATA_VERSIONS.len() - 1].0;
+
+/// The reading rules a checkpoint records for each log: the number
+/// `DATA_VERSION` names.
+pub const PARSER_VERSION: u32 = DATA_VERSIONS[DATA_VERSIONS.len() - 1].1;
 
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;

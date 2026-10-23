@@ -36,6 +36,7 @@ import {
   type Logo,
 } from "./panel/theme";
 import { SourceTokenChart } from "./panel/TokenChartSection";
+import { SourceIndexing } from "./panel/IndexingSection";
 import { snapshotLanguage } from "@agent-hud/ui/format";
 
 export { SOURCE_PANEL } from "./panel/theme";
@@ -330,6 +331,21 @@ export const SourceHoverPanel = memo(function SourceHoverPanel({
               }
             >
               {inlineAlert}
+            </div>
+          )}
+          {snapshot.indexing?.kind && (
+            <div
+              data-hud-section="indexing"
+              style={
+                config.panelLayout.style?.separators !== false
+                  ? {
+                      boxShadow: `inset 0 -1px 0 ${colors.divider}`,
+                      paddingBottom: "var(--hud-divided-gap)",
+                    }
+                  : undefined
+              }
+            >
+              <SourceIndexing snapshot={snapshot} light={light} />
             </div>
           )}
           {focusVendor && !vendorNames.length && (

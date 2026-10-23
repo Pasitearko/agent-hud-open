@@ -111,7 +111,8 @@ fn logs_last_written_over_31_days_ago_are_not_read_and_keep_what_they_counted() 
         "a log within the retention is read to its end"
     );
     assert!(!backend.indexing());
-    assert_eq!(snapshot["indexing"], json!({"complete":true,"pending":0}));
+    assert_eq!(snapshot["indexing"]["complete"], true);
+    assert_eq!(snapshot["indexing"]["pending"], 0);
 }
 
 #[test]
@@ -220,8 +221,11 @@ fn a_log_that_cannot_be_read_waits_out_a_pause_and_is_not_waited_for() {
         .request("request_snapshot", json!({"changesOnly":true}))
         .unwrap();
     assert_eq!(
-        snapshot["indexing"],
-        json!({"complete":false,"pending":1}),
+        (
+            &snapshot["indexing"]["complete"],
+            &snapshot["indexing"]["pending"]
+        ),
+        (&json!(false), &json!(1)),
         "pausing a read changes scheduling, not history completeness"
     );
     backend
@@ -471,4 +475,88 @@ fn the_next_pass_is_due_at_the_folder_walk_or_a_failed_reads_retry() {
             && from_now <= std::time::Duration::from_secs(30),
         "{from_now:?}"
     );
+}
+
+#[test]
+fn a_ledger_is_indexed_with_its_progress_and_records_its_data_version() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let root = home.join(".claude/projects/test");
+    fs::create_dir_all(&root).unwrap();
+    // A log too long for one pass.
+    let line = |n: usize| {
+        json!({"sessionId":"s1","type":"assistant","message":{"id":format!("m{n}"),"usage":{"input_tokens":10,"output_tokens":3}},"pad":"x".repeat(900_000)})
+            .to_string()
+            + "\n"
+    };
+    fs::write(
+        root.join("long.jsonl"),
+        (0..4).map(line).collect::<String>(),
+    )
+    .unwrap();
+    let bytes = |snapshot: &Value| {
+        let indexing = &snapshot["indexing"];
+        (
+            indexing["bytesDone"].as_u64().unwrap(),
+            indexing["bytesTotal"].as_u64().unwrap(),
+        )
+    };
+
+    let mut backend = fixture(home);
+    let first = backend.request("snapshot", json!({})).unwrap();
+    assert_eq!(first["indexing"]["kind"], "first", "{}", first["indexing"]);
+    assert_eq!(first["indexing"]["dataVersion"], crate::DATA_VERSION);
+    let (done, total) = bytes(&first);
+    assert!(done > 0 && done < total, "{}", first["indexing"]);
+    let finished = backend.request("refresh", json!({})).unwrap();
+    assert_eq!(finished["indexing"]["kind"], Value::Null);
+    let (done, total) = bytes(&finished);
+    assert_eq!(done, total);
+    drop(backend);
+    let ledger = rusqlite::Connection::open(home.join("app/ingestion.sqlite")).unwrap();
+    let recorded: String = ledger
+        .query_row(
+            "SELECT value FROM ingestion_meta WHERE key='data_version'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(recorded, crate::DATA_VERSION);
+
+    // A ledger recorded under another data version is read again.
+    ledger
+        .execute(
+            "UPDATE ingestion_meta SET value='0.5.9' WHERE key='data_version'",
+            [],
+        )
+        .unwrap();
+    ledger
+        .execute(
+            "UPDATE ingestion_logs SET head=json_set(head,'$.parser_version',6),payload=json_set(payload,'$.parser_version',6)",
+            [],
+        )
+        .unwrap();
+    drop(ledger);
+    let mut backend = fixture(home);
+    let again = backend.request("snapshot", json!({})).unwrap();
+    assert_eq!(
+        again["indexing"]["kind"], "reindex",
+        "{}",
+        again["indexing"]
+    );
+    let (done, total) = bytes(&again);
+    assert!(done < total, "{}", again["indexing"]);
+    let finished = backend.request("refresh", json!({})).unwrap();
+    assert_eq!(finished["indexing"]["kind"], Value::Null);
+    assert_eq!(
+        finished["totals"]["total"],
+        4 * 13,
+        "read again, counted once"
+    );
+
+    // Launched again, a ledger that holds this build's data version is not.
+    drop(backend);
+    let mut backend = fixture(home);
+    let settled = backend.request("snapshot", json!({})).unwrap();
+    assert_eq!(settled["indexing"]["kind"], Value::Null);
 }
