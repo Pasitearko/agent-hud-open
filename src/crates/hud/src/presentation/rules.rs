@@ -223,7 +223,7 @@ pub(super) struct Block {
 }
 
 /// The blocks the panel has, in its default order: a quota block per vendor in row
-/// order, then a balance block per API vendor in the order of the balances, as
+/// order, then detected clients without balances, then a block per API vendor, as
 /// src/packages/hud/src/HoverPanel.tsx draws them.
 pub(super) fn present_blocks(snapshot: &Value) -> Vec<Block> {
     let mut blocks: Vec<Block> = vec![];
@@ -266,6 +266,23 @@ pub(super) fn present_blocks(snapshot: &Value) -> Vec<Block> {
         if !block.accounts.iter().any(|(id, _)| id == account) {
             let name = quota["account"].as_str().map(str::to_owned);
             block.accounts.push((account.to_owned(), name));
+        }
+    }
+    for provider in snapshot["providers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|provider| provider["detected"] == true && provider["enabled"] == true)
+    {
+        if let Some(id) = provider["id"].as_str().filter(|id| !id.is_empty()) {
+            let has_balance = snapshot["billing"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|balance| mark(balance["vendor"].as_str().unwrap_or("")) == mark(id));
+            if !has_balance {
+                entry(&mut blocks, id, Kind::Quota);
+            }
         }
     }
     for balance in snapshot["billing"].as_array().into_iter().flatten() {
@@ -951,33 +968,42 @@ pub fn resting_agents(snapshot: &Value, mode: &str, now: i64) -> Vec<String> {
         for b in billing {
             add(b["vendor"].as_str().unwrap_or(""));
         }
-        return order;
-    }
-    for q in quotas {
-        add(q["vendor"].as_str().unwrap_or(""));
-    }
-    if mode == "simple" {
-        for b in billing {
-            add(b["vendor"].as_str().unwrap_or(""));
+    } else {
+        for q in quotas {
+            add(q["vendor"].as_str().unwrap_or(""));
         }
-        return order;
+        if mode == "simple" {
+            for b in billing {
+                add(b["vendor"].as_str().unwrap_or(""));
+            }
+        } else {
+            let mut recent: Vec<(i64, &str)> = snapshot["sessions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|s| {
+                    let source = s["source"].as_str()?;
+                    let at = chrono::DateTime::parse_from_rfc3339(s["updatedAt"].as_str()?)
+                        .ok()?
+                        .timestamp_millis();
+                    let live =
+                        snapshot["sourcePreferences"][source_id(snapshot, source)]["live"] != false;
+                    (now <= at + QUEUE_RECENCY_MS && live).then_some((at, source))
+                })
+                .collect();
+            recent.sort_by_key(|a| std::cmp::Reverse(a.0));
+            for (_, source) in recent {
+                add(source);
+            }
+        }
     }
-    let mut recent: Vec<(i64, &str)> = snapshot["sessions"]
+    for provider in snapshot["providers"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|s| {
-            let source = s["source"].as_str()?;
-            let at = chrono::DateTime::parse_from_rfc3339(s["updatedAt"].as_str()?)
-                .ok()?
-                .timestamp_millis();
-            let live = snapshot["sourcePreferences"][source_id(snapshot, source)]["live"] != false;
-            (now <= at + QUEUE_RECENCY_MS && live).then_some((at, source))
-        })
-        .collect();
-    recent.sort_by_key(|a| std::cmp::Reverse(a.0));
-    for (_, source) in recent {
-        add(source);
+        .filter(|provider| provider["detected"] == true && provider["enabled"] == true)
+    {
+        add(provider["id"].as_str().unwrap_or(""));
     }
     order
 }

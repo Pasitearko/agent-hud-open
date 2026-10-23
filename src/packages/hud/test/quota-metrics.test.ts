@@ -23,14 +23,14 @@ const row = (extra: object) =>
     ...extra,
   }) as never;
 
-test("missing values and details read as dashes, a read window without a figure as N/A", () => {
+test("missing quotas read as -- whether or not the window has been observed", () => {
   assert.deepEqual(
     [
       quotaMetric(row({ usedPercent: null }), "quota", now, en).value,
       quotaMetric(row({ usedPercent: null, resetAt: null }), "quota", now, en)
         .detail,
     ],
-    ["—", "—"],
+    ["--", "—"],
   );
   assert.equal(
     quotaMetric(
@@ -39,7 +39,7 @@ test("missing values and details read as dashes, a read window without a figure 
       now,
       en,
     ).value,
-    "N/A",
+    "--",
   );
   assert.deepEqual(
     [

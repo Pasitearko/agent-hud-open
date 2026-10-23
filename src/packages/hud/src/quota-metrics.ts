@@ -91,10 +91,9 @@ function rowResetLabel(row: Quota, now: number, settings: FormatSettings) {
   );
 }
 
-/** What a quota row's measure reads (Open's QuotaRowMetrics): the value, or
- * "—" where there is none, and the detail beside it, "—" where there is
- * none. A reading that shows no level, stale in Next, has no burn rate,
- * outlook, reply rate, consumption or cost. Formatting only: the UI never
+/** What a quota row's measure reads: missing quota is "--", other missing
+ * measures and details are "—". A reading that shows no level, stale in Next,
+ * has no burn rate, outlook, reply rate, consumption or cost. Formatting only: the UI never
  * assigns session totals or rates to a quota window. */
 export function quotaMetric(
   row: Quota,
@@ -119,6 +118,7 @@ export function quotaMetric(
     "Last quota reading is stale; refresh this account.",
   );
   if (measure === "quota") {
+    result.value = "--";
     result.detail = rowResetLabel(row, now, settings);
     if (finite(row.usedPercent)) {
       result.value = `${Math.round(row.usedPercent)}%`;
@@ -127,9 +127,6 @@ export function quotaMetric(
         row.status === "stale"
           ? stale
           : `${row.name}: ${result.value} · ${result.detail}`;
-    } else if (row.observedAt) {
-      // Read, but with no figure for this window.
-      result.value = "N/A";
     }
     return result;
   }

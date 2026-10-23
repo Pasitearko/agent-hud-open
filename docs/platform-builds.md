@@ -60,6 +60,11 @@ qualify desktop focus, display, client, or network behavior.
 
 ### Windows machine acceptance
 
+- With only Codex Desktop installed (including Microsoft Store), confirm the enabled
+  Codex source appears in the HUD and its expanded panel before quota data is available.
+  Missing quota displays `--`; a successful account read replaces it with the real value.
+  User-disabled sources and explicitly hidden layout items remain hidden.
+
 - Install, launch, quit and relaunch from a path containing spaces and non-ASCII
   characters; check a second launch raises the existing app.
 - Read real Claude/Codex logs. In the public `agent-hud-open` app, verify that

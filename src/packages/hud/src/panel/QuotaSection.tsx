@@ -439,7 +439,7 @@ export function QuotaWidgets({
                     color: figure,
                   }}
                 >
-                  {row.usedPercent == null ? "—" : `${Math.round(pct)}%`}
+                  {row.usedPercent == null ? "--" : `${Math.round(pct)}%`}
                 </span>
               </div>
             ) : null}
@@ -549,6 +549,7 @@ export const SourceProviderBlock = memo(function SourceProviderBlock({
       };
     });
   }, [rows, accountInfo]);
+  const missingReading = !snapshot.quotas.some((row) => row.vendor === vendor);
   const countdown = layout.countdown ?? showReset;
   return (
     <section
@@ -590,7 +591,7 @@ export const SourceProviderBlock = memo(function SourceProviderBlock({
           {agentVendorName(vendor)}
         </strong>
         <span style={{ flex: 1 }} />
-        {layout.widget !== "chart" && (
+        {layout.widget !== "chart" && !missingReading && (
           <MetricPicker
             selected={measure}
             choose={setMeasure}
@@ -619,6 +620,17 @@ export const SourceProviderBlock = memo(function SourceProviderBlock({
           layout={{ period: layout.period }}
           active={active}
         />
+      ) : missingReading ? (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            color: colors.secondary,
+          }}
+        >
+          <span>{format.language === "zh" ? "额度" : "Quota"}</span>
+          <strong>--</strong>
+        </div>
       ) : (
         sections.map(({ key, rows: sectionRows, account, current }) => {
           // Earned resets belong to the signed-in Codex account.
