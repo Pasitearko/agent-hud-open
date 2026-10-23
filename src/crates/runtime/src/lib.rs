@@ -9,6 +9,8 @@ use std::{
 
 mod demo;
 mod log_reminders;
+#[cfg(test)]
+mod tests;
 pub use agent_hud_core::demo::DemoScript;
 pub use agent_hud_core::l10n;
 pub use agent_hud_core::projects;
@@ -304,17 +306,58 @@ impl Runtime {
         if method == "answer_request" {
             return self.core.request(method, params);
         }
-        if method == "set_setting" {
-            let result = self.core.request(method, params)?;
-            return Ok(self.decorate_snapshot(result, false));
-        }
-        if method == "request_snapshot" {
-            let events = self
+        if method == "antigravity_cli_status" {
+            return Ok(self
                 .hooks
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
-                .drain_events();
-            self.core.ingest_hook_events(events);
+                .antigravity_cli_status());
+        }
+        if method == "set_setting" {
+            if params["key"] == "antigravityCliSettings" {
+                if self.is_demo() {
+                    return Err(l10n::text(
+                        "演示模式不会更改 CLI 配置。",
+                        "The demo leaves CLI settings unchanged.",
+                    ));
+                }
+                let next = params["value"]
+                    .as_array()
+                    .ok_or("CLI settings must be a list of paths")?
+                    .iter()
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .filter(|path| {
+                                !path.is_empty() && path.trim() == *path && !path.contains('\0')
+                            })
+                            .map(PathBuf::from)
+                            .ok_or("Each CLI setting must name a path")
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let hooks = self.hooks.lock().unwrap_or_else(|p| p.into_inner());
+                let change = hooks
+                    .set_antigravity_cli_accounts(&self.core.antigravity_cli_settings(), &next)?;
+                let result = self.core.request(
+                    method,
+                    json!({"key":"antigravityCliSettings","value":change.settings()}),
+                );
+                if result.is_err() {
+                    change.rollback().map_err(|error| format!("CLI settings could not be saved, and restoring the previous configuration failed: {error}"))?;
+                }
+                drop(hooks);
+                return result.map(|result| self.decorate_snapshot(result, true));
+            }
+            if params["key"] == "codexHomes" {
+                if let Some(accounts) = &self.accounts {
+                    accounts.validate_account_homes(&params["value"])?;
+                }
+            }
+            let result = self.core.request(method, params)?;
+            return Ok(self.decorate_snapshot(result, true));
+        }
+        if method == "request_snapshot" {
+            self.ingest_pending_hook_events();
             let method = if self.apply_log_reminders() || self.core.has_reminded_reads() {
                 "reminder_snapshot"
             } else {
@@ -337,12 +380,7 @@ impl Runtime {
             self.core.set_legacy_quota_database(Some(path));
         }
         self.core.file_changes(self.changes.consume());
-        let events = self
-            .hooks
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .drain_events();
-        self.core.ingest_hook_events(events);
+        self.ingest_pending_hook_events();
         self.apply_log_reminders();
         if let Some(accounts) = &self.accounts {
             if method == "refresh" {
@@ -359,6 +397,28 @@ impl Runtime {
         let result = self.core.request(method, params)?;
         Ok(self.decorate_snapshot(result, true))
     }
+    fn ingest_pending_hook_events(&mut self) {
+        let events = self
+            .hooks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .drain_events();
+        let events = events
+            .into_iter()
+            .filter(|event| {
+                if event.kind == "account" {
+                    if let Some(accounts) = &self.accounts {
+                        accounts.account_changed(&event.source);
+                    }
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect();
+        self.core.ingest_hook_events(events);
+    }
+
     fn decorate_snapshot(&self, mut result: Value, update_accounts: bool) -> Value {
         if result.get("schemaVersion").is_some() {
             let hooks = self.hooks.lock().unwrap_or_else(|p| p.into_inner());

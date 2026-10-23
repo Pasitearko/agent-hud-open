@@ -8,7 +8,12 @@ import type {
 import { agentArtworkKey, agentVendorName } from "./agent-artwork";
 import { restingAgents } from "./resting-agents.ts";
 import type { GlowEffect, GlowStyle } from "./HUDGlow";
-import { moneyAmount, snapshotLanguage } from "@agent-hud/ui/format";
+import {
+  moneyAmount,
+  snapshotLanguage,
+  quotaPercentLabel,
+  type QuotaDisplay,
+} from "@agent-hud/ui/format";
 export { agentVendorName } from "./agent-artwork";
 
 export type HUDMode = "notch" | "logos" | "simple";
@@ -187,10 +192,10 @@ export function quotaShortName(quota: {
   return quota.shortLabel || quota.name;
 }
 
-export function meterLabel(vendor: HUDVendor): string {
+export function meterLabel(vendor: HUDVendor, display?: QuotaDisplay): string {
   return vendor.used == null
     ? (vendor.balance ?? "–")
-    : `${Math.round(vendor.used)}%`;
+    : quotaPercentLabel(vendor.used, display);
 }
 
 export function statusColor(level: HUDVendor["level"]): string {

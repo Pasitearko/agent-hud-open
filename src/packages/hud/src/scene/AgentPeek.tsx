@@ -1,4 +1,6 @@
 import { labelWidth } from "../geometry";
+import { useFormat } from "@agent-hud/ui/format-context";
+import { quotaPercentLabel, type QuotaDisplay } from "@agent-hud/ui/format";
 import { useMarkLevelText } from "../ground";
 import {
   quotaShortName,
@@ -20,6 +22,7 @@ export function peekItems(
   vendor: HUDVendor,
   zh: boolean,
   color: (level: HUDVendor["level"]) => string = statusColor,
+  display?: QuotaDisplay,
 ): PeekItem[] {
   const seen = new Set<string>();
   const items: PeekItem[] = vendor.quotas
@@ -32,7 +35,8 @@ export function peekItems(
     .map((q) => ({
       id: q.id,
       label: quotaShortName(q),
-      value: q.usedPercent == null ? "–" : `${Math.round(q.usedPercent)}%`,
+      value:
+        q.usedPercent == null ? "–" : quotaPercentLabel(q.usedPercent, display),
       color: q.usedPercent == null ? undefined : color(q.status),
     }));
   if (vendor.balance)
@@ -59,11 +63,12 @@ export function peekLineWidth(
   scale: number,
   zh: boolean,
   tuck: number,
+  display?: QuotaDisplay,
 ): number {
   const font = Math.round(9 * scale),
     gap = Math.round(5 * scale),
     spacing = Math.round(12 * scale),
-    items = peekItems(vendor, zh);
+    items = peekItems(vendor, zh, statusColor, display);
   const cells = items.length
     ? items.reduce(
         (sum, item) =>
@@ -100,8 +105,9 @@ export function AgentPeek({
   edge?: HUDEdge;
 }) {
   const color = useMarkLevelText(light);
+  const { quotaDisplay } = useFormat();
   if (simple) {
-    const items = peekItems(vendor, zh, color);
+    const items = peekItems(vendor, zh, color, quotaDisplay);
     return (
       <div
         className="hud-agent-peek-line"
@@ -177,7 +183,9 @@ export function AgentPeek({
               fontSize: 12 * scale,
             }}
           >
-            {q.usedPercent == null ? "–" : `${Math.round(q.usedPercent)}%`}
+            {q.usedPercent == null
+              ? "–"
+              : quotaPercentLabel(q.usedPercent, quotaDisplay)}
           </strong>
         </div>
       ))}

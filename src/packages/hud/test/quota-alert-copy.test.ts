@@ -74,3 +74,37 @@ test("a credit card names the first expiry as a date", () => {
     ["+2 resets", "2 usage resets were added to this account.", "Nov 2"],
   );
 });
+
+test("remaining display keeps alert thresholds and forecasts in consumed semantics", () => {
+  const reading = event({ usedPercent: 92, timeToExhaustSeconds: 3000 });
+  const consumed = quotaAlertCopy(reading, en);
+  const remaining = quotaAlertCopy(reading, {
+    ...en,
+    quotaDisplay: "remaining",
+  });
+  assert.equal(remaining.display, "8%");
+  assert.equal(remaining.displayPct, 8);
+  assert.equal(remaining.displayLabel, "Quota remaining");
+  assert.equal(consumed.display, "92%");
+  assert.equal(remaining.title, consumed.title);
+  assert.equal(remaining.compactTitle, consumed.compactTitle);
+  assert.equal(remaining.exhaustion, consumed.exhaustion);
+  assert.equal(
+    quotaAlertCopy(event({ usedPercent: 100 }), {
+      ...en,
+      quotaDisplay: "remaining",
+    }).display,
+    "0%",
+  );
+  assert.equal(
+    quotaAlertCopy(event({ usedPercent: 0, kind: "quota-reset" }), {
+      ...en,
+      quotaDisplay: "remaining",
+    }).display,
+    "100%",
+  );
+  assert.equal(
+    quotaAlertCopy(event({}), { ...en, quotaDisplay: "remaining" }).display,
+    "N/A",
+  );
+});

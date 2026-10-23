@@ -6,6 +6,7 @@ const methods = new Set([
   "statistics",
   "sessions",
   "set_setting",
+  "antigravity_cli_status",
   "set_provider",
   "answer_request",
   "session_detail",

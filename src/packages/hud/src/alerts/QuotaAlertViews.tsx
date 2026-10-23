@@ -276,18 +276,24 @@ export function QuotaAlertView({
           gap: 12,
         }}
       >
+        <Metric value={copy.display} label={copy.displayLabel} light={light} />
         <Metric
-          value={copy.used}
-          label={zh ? "已用额度" : "used"}
-          light={light}
-        />
-        <Metric
-          value={isReset ? copy.remaining : copy.exhaustion}
+          value={
+            isReset
+              ? settings.quotaDisplay === "remaining"
+                ? copy.used
+                : copy.remaining
+              : copy.exhaustion
+          }
           label={
             isReset
-              ? zh
-                ? "剩余额度"
-                : "remaining"
+              ? settings.quotaDisplay === "remaining"
+                ? zh
+                  ? "已用额度"
+                  : "used"
+                : zh
+                  ? "剩余额度"
+                  : "remaining"
               : zh
                 ? "预计耗尽"
                 : "until empty"
@@ -313,7 +319,7 @@ export function QuotaAlertView({
           </span>
           <span style={{ flex: 1, minWidth: 8 }} />
           <span style={{ fontVariantNumeric: "tabular-nums" }}>
-            {copy.used}
+            {copy.display}
           </span>
         </div>
         <div
@@ -326,7 +332,7 @@ export function QuotaAlertView({
         >
           <div
             style={{
-              width: `${copy.usedPct ?? 0}%`,
+              width: `${copy.displayPct ?? 0}%`,
               height: "100%",
               borderRadius: 4,
               background: accentFill,

@@ -16,6 +16,7 @@ use std::{
     },
 };
 const RECORD_LIMIT: u64 = 64 * 1024;
+const ACCOUNT_LOCK: &str = ".accounts.lock";
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(super) fn prepare(directory: &Path) -> Result<(), String> {
@@ -30,7 +31,7 @@ fn key(event: &HookEvent) -> String {
     }
     format!("{:x}", hash.finalize())
 }
-fn read(path: &Path) -> Option<(HookEvent, Vec<u8>)> {
+pub(super) fn read(path: &Path) -> Option<(HookEvent, Vec<u8>)> {
     let metadata = fs::symlink_metadata(path).ok()?;
     if !metadata.is_file() || metadata.len() > RECORD_LIMIT {
         return None;
@@ -42,19 +43,38 @@ fn read(path: &Path) -> Option<(HookEvent, Vec<u8>)> {
     let event: HookEvent = serde_json::from_slice(&bytes).ok()?;
     Some((event, bytes))
 }
-fn valid(event: &HookEvent, now: i64) -> bool {
+pub(super) fn valid(event: &HookEvent, now: i64) -> bool {
     if event.session_id.is_empty() || event.at_ms > now.saturating_add(60_000) {
         return false;
     }
     let retention = match event.kind.as_str() {
         "attention" => 86_400_000,
         "compaction" => 300_000,
-        "completion" => 30 * 86_400_000,
+        "completion" | "account" => 30 * 86_400_000,
         "origin" => i64::MAX,
         _ => return false,
     };
     now.saturating_sub(event.at_ms) < retention
 }
+
+/// Serialize account callbacks across processes so the timestamp comparison
+/// and atomic replacement cannot let an older report overwrite a newer one.
+fn account_lock(directory: &Path) -> Result<fs::File, String> {
+    let path = directory.join(ACCOUNT_LOCK);
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    crate::os::private_file(&mut options);
+    let file = options
+        .open(&path)
+        .map_err(|_| "Account inbox lock unavailable")?;
+    let metadata = fs::symlink_metadata(&path).map_err(|_| "Account inbox lock unavailable")?;
+    if !metadata.is_file() || !crate::os::owned_by_user(&path, &metadata) {
+        return Err("Account inbox lock must belong to the current user".into());
+    }
+    file.lock().map_err(|_| "Account inbox lock unavailable")?;
+    Ok(file)
+}
+
 /// Only reduced public reporting facts are persisted. Approval payloads never
 /// enter this inbox. A hook can report while the GUI and Runtime are absent.
 pub fn record_event(data: &Path, event: &HookEvent) -> Result<(), String> {
@@ -64,6 +84,9 @@ pub fn record_event(data: &Path, event: &HookEvent) -> Result<(), String> {
     let directory = data.join("hooks/inbox");
     prepare(&data.join("hooks"))?;
     prepare(&directory)?;
+    let _account_lock = (event.kind == "account")
+        .then(|| account_lock(&directory))
+        .transpose()?;
     let path = directory.join(format!("{}.json", key(event)));
     if read(&path).is_some_and(|(old, _)| old.at_ms > event.at_ms) {
         return Ok(());
@@ -194,7 +217,7 @@ enum Change {
     Full,
     Paths(HashSet<PathBuf>),
 }
-fn is_record(path: &Path) -> bool {
+pub(super) fn is_record(path: &Path) -> bool {
     path.extension().and_then(|s| s.to_str()) == Some("json")
 }
 fn temporary(path: &Path) -> bool {
@@ -224,6 +247,9 @@ fn changed_paths(directory: &Path, event: notify::Result<Event>) -> Option<Chang
         if !path.starts_with(directory) {
             continue;
         }
+        if path.file_name().is_some_and(|name| name == ACCOUNT_LOCK) {
+            continue;
+        }
         if matches!(
             event.kind,
             EventKind::Create(CreateKind::Folder) | EventKind::Remove(RemoveKind::Folder)
@@ -245,4 +271,72 @@ fn changed_paths(directory: &Path, event: notify::Result<Event>) -> Option<Chang
         }
     }
     (!paths.is_empty()).then_some(Change::Paths(paths))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn concurrent_account_callbacks_keep_the_newest_report() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path();
+        let directory = data.join("hooks/inbox");
+        prepare(&data.join("hooks")).unwrap();
+        prepare(&directory).unwrap();
+        let lock = account_lock(&directory).unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let at = now_ms() - 1_000;
+        let mut workers = Vec::new();
+        for index in 0..16 {
+            let data = data.to_path_buf();
+            let started = started_tx.clone();
+            let done = done_tx.clone();
+            workers.push(std::thread::spawn(move || {
+                let event = HookEvent {
+                    source: "antigravity".into(),
+                    session_id: "one-account".into(),
+                    kind: "account".into(),
+                    at_ms: at + index,
+                    data: json!({"sample": index}),
+                };
+                started.send(()).unwrap();
+                record_event(&data, &event).unwrap();
+                done.send(()).unwrap();
+            }));
+        }
+        for _ in 0..16 {
+            started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        assert!(
+            matches!(
+                done_rx.recv_timeout(Duration::from_millis(100)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ),
+            "callbacks must wait for the other writer's timestamp/rename transaction"
+        );
+        drop(lock);
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let records = fs::read_dir(&directory)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| is_record(path))
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 1);
+        let (event, _) = read(&records[0]).unwrap();
+        assert_eq!(event.at_ms, at + 15);
+        assert_eq!(event.data["sample"], 15);
+        assert!(changed_paths(
+            &directory,
+            Ok(Event::new(EventKind::Any).add_path(directory.join(ACCOUNT_LOCK)))
+        )
+        .is_none());
+    }
 }

@@ -18,6 +18,12 @@ fn unavailable_installer(arguments: &[String]) -> Option<&'static str> {
 /// Must run before Runtime/UI/account construction. Unknown future hook flags
 /// exit successfully and silently instead of accidentally launching an app.
 pub fn entry(arguments: &[String]) -> Option<i32> {
+    if arguments
+        .get(1)
+        .is_some_and(|flag| flag == super::statusline::FLAG)
+    {
+        return Some(super::statusline::entry(arguments));
+    }
     if let Some(message) = unavailable_installer(arguments) {
         let _ = std::io::stderr().lock().write_all(message.as_bytes());
         return Some(1);
@@ -52,6 +58,12 @@ pub fn handle_with_io(
     input: &mut dyn Read,
     output: &mut dyn Write,
 ) -> Option<i32> {
+    if arguments
+        .get(1)
+        .is_some_and(|flag| flag == super::statusline::FLAG)
+    {
+        return Some(super::statusline::handle_with_io(arguments, input));
+    }
     // An unsupported explicit installer is a failure, never a successful
     // no-op or a reason to fall through into the desktop application.
     if unavailable_installer(arguments).is_some() {

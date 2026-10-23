@@ -1,3 +1,5 @@
+import { useFormat } from "@agent-hud/ui/format-context";
+import { quotaPercent, quotaPercentLabel } from "@agent-hud/ui/format";
 import settingsWallpaper from "@agent-hud/ui/assets/settings-wallpaper.png";
 import {
   DollarSign,
@@ -45,7 +47,7 @@ export function SmallHUDPreview({
   const hasActiveVendor = vendors.some(
     (vendor) => vendor.working > 0 || vendor.waiting > 0,
   );
-  const metrics = stripMetrics(sample, vendors);
+  const metrics = stripMetrics(sample, vendors, snapshot.settings.quotaDisplay);
   const simple = sample.mode === "simple";
   const light =
     sample.appearance === "light" ||
@@ -189,13 +191,16 @@ export function SmallHUDPreview({
                             fill="none"
                             pathLength={100}
                             stroke={
-                              vendor.used == null
+                              (quotaPercent(
+                                vendor.used,
+                                snapshot.settings.quotaDisplay,
+                              ) ?? 0) <= 0
                                 ? "transparent"
                                 : statusColor(vendor.level)
                             }
                             strokeWidth={sample.ringWidth}
                             strokeLinecap="round"
-                            strokeDasharray={`${Math.min(100, Math.max(0, vendor.used ?? 0))} 100`}
+                            strokeDasharray={`${quotaPercent(vendor.used, snapshot.settings.quotaDisplay) ?? 0} 100`}
                           />
                         </svg>
                       )}
@@ -222,7 +227,7 @@ export function SmallHUDPreview({
                           fontVariantNumeric: "tabular-nums",
                         }}
                       >
-                        {meterLabel(vendor)}
+                        {meterLabel(vendor, snapshot.settings.quotaDisplay)}
                       </span>
                     )}
                   </div>
@@ -250,6 +255,7 @@ export function PartSample({
     config.appearance === "light" ||
     (config.appearance === "system" &&
       !matchMedia("(prefers-color-scheme: dark)").matches);
+  const { quotaDisplay } = useFormat();
   const amounts = [4, 8, 5, 11, 16, 9, 6, 13, 20, 14, 10, 7];
   return (
     <div
@@ -379,14 +385,16 @@ export function PartSample({
               <i
                 style={{
                   display: "block",
-                  width: "28%",
+                  width: `${quotaPercent(28, quotaDisplay)}%`,
                   height: 4,
                   borderRadius: 5,
                   background: "#34c759",
                 }}
               />
             </span>
-            <strong style={{ color: "#34c759", fontWeight: 600 }}>28%</strong>
+            <strong style={{ color: "#34c759", fontWeight: 600 }}>
+              {quotaPercentLabel(28, quotaDisplay)}
+            </strong>
             {config.resetCountdown && (
               <span
                 style={{

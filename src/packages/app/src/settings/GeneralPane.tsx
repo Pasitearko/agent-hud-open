@@ -100,6 +100,25 @@ export function GeneralPane({ snapshot, action }: SettingsPaneProps) {
             />
           </Row>
         </Section>
+        <Section title={t("Usage display", "用量显示")}>
+          <Row
+            title={t("Quota percentage", "额度百分比")}
+            subtitle={t(
+              "Choose whether percentages, rings and bars show used or remaining quota.",
+              "选择百分比、圆环和进度条显示已用额度还是剩余额度。",
+            )}
+          >
+            <Menu
+              label={t("Quota percentage", "额度百分比")}
+              value={snapshot.settings.quotaDisplay ?? "consumed"}
+              options={[
+                ["consumed", t("Consumed (0% → 100%)", "已用（0% → 100%）")],
+                ["remaining", t("Remaining (100% → 0%)", "剩余（100% → 0%）")],
+              ]}
+              change={(value) => setting("quotaDisplay", value)}
+            />
+          </Row>
+        </Section>
         <Section title={t("Startup", "启动")}>
           <ToggleRow
             title={t("Launch at login", "登录时启动")}

@@ -187,6 +187,14 @@ pub trait Host {
     fn folder(&self, base: Base) -> PathBuf;
     /// An environment variable of the user's session.
     fn env(&self, name: &str) -> Option<&str>;
+    /// Additional client homes selected in Agent HUD for subscription readings.
+    fn account_homes(&self, _agent: &str) -> Vec<PathBuf> {
+        Vec::new()
+    }
+    /// Sanitized subscription reports supplied by a connected client's callback.
+    fn account_reports(&self, _agent: &str) -> Vec<Value> {
+        Vec::new()
+    }
     /// A file's first `limit + 1` bytes, so the caller can tell a file over
     /// its limit from one that fits.
     fn read_file(&self, path: &Path, limit: u64) -> Answer<Vec<u8>>;
@@ -428,7 +436,11 @@ pub(crate) mod fake {
         pub os: Os,
         pub home: PathBuf,
         pub env: HashMap<String, String>,
+        pub account_homes: HashMap<String, Vec<PathBuf>>,
+        pub account_reports: HashMap<String, Vec<Value>>,
         pub files: HashMap<PathBuf, Answer<Vec<u8>>>,
+        /// Canonical targets for paths that resolve to another location.
+        pub canonical_paths: HashMap<PathBuf, PathBuf>,
         pub secrets: HashMap<String, Answer<String>>,
         pub saved: Result<Option<Value>, String>,
         /// File details by path; a listed file without them is a small regular file.
@@ -453,6 +465,8 @@ pub(crate) mod fake {
         pub executables: HashMap<String, PathBuf>,
         /// What every engine answers, by the id of the request it answers.
         pub engine_replies: HashMap<u64, Value>,
+        /// Codex engine replies for a particular account home.
+        pub engine_replies_by_home: HashMap<PathBuf, HashMap<u64, Value>>,
         /// What an engine prints as soon as it starts, by its first argument.
         pub engine_output: HashMap<String, Vec<Value>>,
         /// Whether an engine's output ends once it has nothing more to say,
@@ -469,7 +483,10 @@ pub(crate) mod fake {
                 os: Os::MacOs,
                 home: home.into(),
                 env: HashMap::new(),
+                account_homes: HashMap::new(),
+                account_reports: HashMap::new(),
                 files: HashMap::new(),
+                canonical_paths: HashMap::new(),
                 secrets: HashMap::new(),
                 saved: Ok(None),
                 info: HashMap::new(),
@@ -484,6 +501,7 @@ pub(crate) mod fake {
                 own: RefCell::new(HashMap::new()),
                 executables: HashMap::new(),
                 engine_replies: HashMap::new(),
+                engine_replies_by_home: HashMap::new(),
                 engine_output: HashMap::new(),
                 engine_ends: true,
                 started: RefCell::new(vec![]),
@@ -505,6 +523,12 @@ pub(crate) mod fake {
         }
     }
     impl Host for FakeHost {
+        fn account_homes(&self, agent: &str) -> Vec<PathBuf> {
+            self.account_homes.get(agent).cloned().unwrap_or_default()
+        }
+        fn account_reports(&self, agent: &str) -> Vec<Value> {
+            self.account_reports.get(agent).cloned().unwrap_or_default()
+        }
         fn os(&self) -> Os {
             self.os
         }
@@ -584,7 +608,13 @@ pub(crate) mod fake {
                 .cloned()
                 .unwrap_or_default();
             Ok(Box::new(FakeEngine {
-                replies: self.engine_replies.clone(),
+                replies: start
+                    .env
+                    .iter()
+                    .find(|(name, _)| *name == "CODEX_HOME")
+                    .and_then(|(_, home)| self.engine_replies_by_home.get(Path::new(home)))
+                    .unwrap_or(&self.engine_replies)
+                    .clone(),
                 ends: self.engine_ends,
                 queue: printed.into(),
                 ended: false,
@@ -610,7 +640,12 @@ pub(crate) mod fake {
             }
         }
         fn canonical(&self, path: &Path) -> Option<PathBuf> {
-            Some(path.into())
+            Some(
+                self.canonical_paths
+                    .get(path)
+                    .cloned()
+                    .unwrap_or_else(|| path.into()),
+            )
         }
         fn secret(&self, service: &str) -> Answer<String> {
             self.secrets
@@ -703,7 +738,11 @@ pub(crate) mod fake {
             self.ended
         }
         fn joined(&mut self, deadline: Instant) -> Option<Value> {
-            self.next(deadline)
+            let body = self.next(deadline);
+            if self.queue.is_empty() && self.ends {
+                self.ended = true;
+            }
+            body
         }
         fn stderr_preview(&self, _limit: usize) -> Option<String> {
             None

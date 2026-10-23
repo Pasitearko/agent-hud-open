@@ -188,7 +188,12 @@ fn plan(
         .map(|snapshot| {
             vendors::configured(snapshot, screen.mode_name(), layout, now_ms)
                 .iter()
-                .map(vendors::meter_label)
+                .map(|vendor| {
+                    vendors::meter_label(
+                        vendor,
+                        snapshot["settings"]["quotaDisplay"] == "remaining",
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default();

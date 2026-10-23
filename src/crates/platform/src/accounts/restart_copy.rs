@@ -11,7 +11,7 @@
 use super::{AccountReading, Entry, Reader};
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -24,16 +24,20 @@ const LIMIT: u64 = 32 * 1024 * 1024;
 /// UsageRefresh.accountInterval.
 pub(super) const SAVE_INTERVAL: Duration = Duration::from_secs(300);
 
+#[derive(Default)]
+pub(super) struct Restored {
+    pub readings: Vec<(AccountReading, String)>,
+    /// Scope of the cached readings, compared with current settings before use.
+    pub account_homes: HashMap<String, Vec<PathBuf>>,
+}
+
 fn path(data_dir: &Path) -> PathBuf {
     data_dir.join(FILE)
 }
 
 /// The kept readings of the providers in `readers`, each with the time it was
 /// read. A missing, unreadable or foreign file restores nothing.
-pub(super) fn load(
-    data_dir: &Path,
-    readers: &[(&'static str, Reader)],
-) -> Vec<(AccountReading, String)> {
+pub(super) fn load(data_dir: &Path, readers: &[(&'static str, Reader)]) -> Restored {
     let path = path(data_dir);
     let Some(copy) = fs::metadata(&path)
         .ok()
@@ -42,10 +46,10 @@ pub(super) fn load(
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .filter(|copy| copy["version"] == VERSION)
     else {
-        return vec![];
+        return Restored::default();
     };
     let rows = |value: &Value| value.as_array().cloned().unwrap_or_default();
-    copy["providers"]
+    let readings = copy["providers"]
         .as_array()
         .into_iter()
         .flatten()
@@ -67,12 +71,19 @@ pub(super) fn load(
             };
             Some((reading, checked_at))
         })
-        .collect()
+        .collect();
+    Restored {
+        readings,
+        account_homes: serde_json::from_value(copy["accountHomes"].clone()).unwrap_or_default(),
+    }
 }
 
 /// The copy of `entries`: every provider that has been read at least once,
 /// with its last good reading.
-pub(super) fn copy(entries: &BTreeMap<&'static str, Entry>) -> Value {
+pub(super) fn copy(
+    entries: &BTreeMap<&'static str, Entry>,
+    account_homes: &HashMap<String, Vec<PathBuf>>,
+) -> Value {
     let providers = entries
         .values()
         .filter_map(|entry| {
@@ -91,7 +102,7 @@ pub(super) fn copy(entries: &BTreeMap<&'static str, Entry>) -> Value {
             }))
         })
         .collect::<Vec<_>>();
-    json!({"version": VERSION, "providers": providers})
+    json!({"version": VERSION, "providers": providers, "accountHomes": account_homes})
 }
 
 /// Replaces the copy in `data_dir` with `copy`, readable by this user only.

@@ -12,8 +12,9 @@ Open: 7 files, 1,295 lines. Counts (51 rows): same 21 · deliberate 1 · better 
 |---|---|---|---|---|
 | Antigravity/AntigravityClient.swift:46-56,96-131 | Quota from RetrieveUserQuotaSummary (groups, buckets, 5h/weekly durations) | none; method not in allowed() whitelist (clients/antigravity/service.rs:142-154); only GetUserStatus | missing | Rows "Gemini Models"/"Claude and GPT models" without window length; legacy value can be stale → may show 25% used when exhausted |
 | AntigravityClient.swift:61-94 | supersededLegacyWindowIDs, summaryNames/compactName | none | missing | Needed once summary is ported |
-| AntigravityCLI.swift:10-44 | Fallback `agy -p /usage --output-format json` | none; token-less agy dropped | missing | Terminal-only agy: no Antigravity quota, error text instead |
-| AntigravityService.swift:88-108 | Candidate priority CLI=1, Antigravity IDE=2 | clients/antigravity/service.rs:44-81 | differs | Two apps on different accounts → may show the IDE account |
+| AntigravityCLI.swift:10-44 | Fallback `agy -p /usage --output-format json` | agents/src/antigravity/cli.rs | fixed | **Fixed 2026-10-22**: the running CLI's executable supplies its weekly and five-hour groups when no identified account is available. The response names no account, so its identity remains local-home. |
+| AntigravityService.swift:88-108 | Candidate priority CLI=1, Antigravity IDE=2 | clients/antigravity/service.rs:read_accounts | better | **2026-10-22**: every readable running service contributes its own account. Email and team identity deduplicate the same sign-in across apps; a failed service does not discard other accounts. |
+| n/a | Identified multiple CLI accounts from official status-line reports | agents/src/antigravity/statusline.rs; platform status-line callback/installer | better | **2026-10-23**: connected CLI settings report email, plan and exact quota windows; different emails remain separate, duplicate sign-ins merge, prior observations stay visibly stale, and existing user status-line commands are preserved. |
 | AntigravityService.swift:27-30,55-68 | Approval discovery remembered 10 s; all listeners of all processes | clients/antigravity/service.rs:176-257 | differs | A second service's approvals never reach the HUD while the first answers |
 | AntigravityClient.swift:11-17,43 | Notices for not running / no readable quota | src/crates/agents/src/antigravity/account.rs:109-114,132-145 | differs | Failed reading marks rows stale; different English-only text The notices are bilingual since 2026-10-20; a failed reading still marks rows stale. |
 | AntigravityClient.swift:27-31 | Empty legacy fallback is not a reading | src/crates/agents/src/antigravity/account.rs:109-114 | differs | "connected, no percentage" instead of summary windows |
@@ -50,6 +51,43 @@ Behaviors summarized above, counted for the ledger totals:
 
 ## Tests
 Mostly portable (JSON/SQLite fixtures, recorded HTTP pairs); `AntigravityCLI.executable` and actor/ledger-bound integration tests are not.
+
+The Rust account tests cover distinct accounts, duplicate sign-ins, anonymous
+services, partial failure, CLI fallback, quota groups, and unfinished CLI output.
+Status-line fixtures also cover sanitized persistence, missing/invalid quota,
+sample age, reset cycles, account switches and CLI/native identity deduplication.
+
+## CLI account selection investigation (2026-10-22)
+
+The installed `agy 1.3.5` exposes no profile, account, or home selector in
+`--help`; `agy help auth` returns `unknown subcommand`. Its binary does not
+contain `GEMINI_CLI_HOME`. `ANTIGRAVITY_APP_DATA_DIR` is emitted into a child
+tool's environment, rather than read as the CLI's account selector. The
+[official authentication guide](https://www.antigravity.google/docs/cli/install/)
+describes the operating system's keyring, while the
+[command reference](https://www.antigravity.google/docs/cli/reference/) documents
+`/usage` and `/logout` but no multiple-profile contract.
+
+Consequently, arbitrary inactive CLI homes are not presented as separately
+queryable accounts. The CLI fallback reads the current default sign-in and
+cannot identify or deduplicate it against native services, so it runs only when
+no identified account is available. Existing third-party account switchers use their
+own credential isolation or replacement; Agent HUD does not rewrite those
+credentials. The older `GEMINI_CLI_HOME` transcript-path descriptor is not
+evidence that the CLI's authentication follows that variable.
+
+The implemented route for identifying active CLI accounts is the official
+[status-line payload](https://www.antigravity.google/docs/cli/statusline/)
+contains `email`, `plan_tier`, and quota buckets with `remaining_fraction` and
+`reset_time`. The ordinary
+[lifecycle hook payloads](https://www.antigravity.google/docs/hooks/) do not
+include those account fields. Agent HUD now installs a separate callback through
+the selected CLI settings files, chains an existing user status-line command,
+and restores that command on disconnect. The callback stores only account and
+quota facts, with the local observation time. It merges duplicate emails and
+retains each account's latest sample after switching sign-ins. Samples become
+stale after five minutes and expire after 30 days. This route supports multiple
+accounts without assuming a profile flag or replacing keychain credentials.
 
 ## Architecture
 - Short labels and meter clamping in TS instead of Core. Short labels fixed 2026-10-20.

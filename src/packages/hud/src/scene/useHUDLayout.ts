@@ -164,6 +164,7 @@ export function useHUDLayout({
           scale,
           snapshotLanguage(snapshot) === "zh",
           peekTuck,
+          snapshot.settings.quotaDisplay,
         )
       : 196 * scale;
   const targetSize =

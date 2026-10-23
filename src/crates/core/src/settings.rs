@@ -7,6 +7,16 @@ impl crate::AgentHudCore {
         self.settings["clientHooks"] == true
     }
 
+    pub fn antigravity_cli_settings(&self) -> Vec<PathBuf> {
+        self.settings["antigravityCliSettings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(PathBuf::from)
+            .collect()
+    }
+
     pub fn set_presentation(&mut self, key: &str, value: &Value) -> Result<Value, String> {
         let mut values = serde_json::Map::new();
         values.insert(key.into(), value.clone());
@@ -92,6 +102,15 @@ impl crate::AgentHudCore {
         match key {
             "appearance" if ["dark", "light", "system"].contains(&value.as_str().unwrap_or("")) => {
             }
+            "quotaDisplay" if matches!(value.as_str(), Some("consumed" | "remaining")) => {}
+            "codexHomes" | "antigravityCliSettings"
+                if value.as_array().is_some_and(|homes| {
+                    homes.iter().all(|home| {
+                        home.as_str().is_some_and(|home| {
+                            !home.is_empty() && home.trim() == home && !home.contains('\0')
+                        })
+                    })
+                }) => {}
             "language" if value.as_str().is_some_and(|s| s.len() <= 32) => {}
             "animations"
             | "showMenuBarIcon"
@@ -156,5 +175,69 @@ impl crate::AgentHudCore {
         fs::write(&temporary, bytes)
             .and_then(|_| fs::rename(temporary, &self.settings_path))
             .map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quota_display_defaults_to_consumed_and_persists_only_supported_choices() {
+        let home = tempfile::tempdir().unwrap();
+        let mut core = AgentHudCore::new(vec![], home.path().to_owned());
+        assert_eq!(core.settings["quotaDisplay"], "consumed");
+        core.apply_setting("quotaDisplay", &json!("remaining"))
+            .unwrap();
+        let reopened = AgentHudCore::new(vec![], home.path().to_owned());
+        assert_eq!(reopened.settings["quotaDisplay"], "remaining");
+        for invalid in [json!("used"), json!(""), json!(true), json!(null)] {
+            assert!(core.apply_setting("quotaDisplay", &invalid).is_err());
+            assert_eq!(core.settings["quotaDisplay"], "remaining");
+        }
+        core.apply_setting("quotaDisplay", &json!("consumed"))
+            .unwrap();
+        assert_eq!(core.settings["quotaDisplay"], "consumed");
+    }
+
+    #[test]
+    fn account_source_paths_persist_and_reject_invalid_entries() {
+        for key in ["codexHomes", "antigravityCliSettings"] {
+            let home = tempfile::tempdir().unwrap();
+            let mut core = AgentHudCore::new(vec![], home.path().to_owned());
+            assert_eq!(core.settings[key], json!([]));
+            let homes = json!(["/work/codex-personal", "~/.codex-work"]);
+            core.apply_setting(key, &homes).unwrap();
+            let reopened = AgentHudCore::new(vec![], home.path().to_owned());
+            assert_eq!(reopened.settings[key], homes);
+            for invalid in [
+                json!(null),
+                json!("/work/codex"),
+                json!([null]),
+                json!([""]),
+                json!([" "]),
+                json!([" /work/codex"]),
+                json!(["/work/codex "]),
+                json!(["/work/\0codex"]),
+            ] {
+                assert!(core.apply_setting(key, &invalid).is_err());
+                assert_eq!(core.settings[key], homes);
+            }
+            core.apply_setting(key, &json!([])).unwrap();
+            assert_eq!(core.settings[key], json!([]));
+        }
+    }
+
+    #[test]
+    fn old_preferences_without_quota_display_keep_the_consumed_default() {
+        let home = tempfile::tempdir().unwrap();
+        fs::write(
+            home.path().join("settings.json"),
+            br#"{"settings":{"language":"en"},"providers":{}}"#,
+        )
+        .unwrap();
+        let core = AgentHudCore::new(vec![], home.path().to_owned());
+        assert_eq!(core.settings["language"], "en");
+        assert_eq!(core.settings["quotaDisplay"], "consumed");
     }
 }

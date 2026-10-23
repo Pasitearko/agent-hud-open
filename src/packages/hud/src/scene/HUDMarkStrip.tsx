@@ -15,6 +15,7 @@ import {
 import { Silhouette } from "./NotchSurface";
 import type { HUDNativePointer } from "../HUDScene";
 import { useFormat } from "@agent-hud/ui/format-context";
+import { quotaPercent, quotaDisplayLabel } from "@agent-hud/ui/format";
 import { useMarkLevelText } from "../ground";
 
 const horizontal = (edge: HUDEdge) => edge === "top" || edge === "bottom";
@@ -86,7 +87,9 @@ export function HUDMarkStrip({
   forceOpen: () => void;
   pin: (key?: string) => void;
 }) {
-  const zh = useFormat().language === "zh";
+  const format = useFormat();
+  const { quotaDisplay } = format;
+  const zh = format.language === "zh";
   // A ring's figure is text: on a see-through ground, its level's see-through shade.
   const figureColor = useMarkLevelText(light);
   // ScreenHUD.surface: a Dynamic backdrop is a flat lip, clipped to the marks' column.
@@ -246,7 +249,7 @@ export function HUDMarkStrip({
               key={vendor.key}
               type="button"
               className="hud-agent-mark"
-              aria-label={`${vendor.name}, ${meterLabel(vendor)}${vendor.working ? `, ${vendor.working} running` : ""}`}
+              aria-label={`${vendor.name}, ${meterLabel(vendor, quotaDisplay)} ${vendor.used == null ? "" : quotaDisplayLabel(quotaDisplay, format.language)}${vendor.working ? `, ${vendor.working} running` : ""}`}
               onPointerEnter={() => {
                 if (hovered !== vendor.key) {
                   setHovered(vendor.key);
@@ -312,14 +315,14 @@ export function HUDMarkStrip({
                       r={(metrics.mark - config.ringWidth) / 2}
                       fill="none"
                       stroke={
-                        vendor.used == null || vendor.used <= 0
+                        (quotaPercent(vendor.used, quotaDisplay) ?? 0) <= 0
                           ? "transparent"
                           : statusColor(vendor.level)
                       }
                       strokeWidth={config.ringWidth}
                       strokeLinecap="round"
                       pathLength={100}
-                      strokeDasharray={`${Math.max(0, Math.min(100, vendor.used ?? 0))} 100`}
+                      strokeDasharray={`${quotaPercent(vendor.used, quotaDisplay) ?? 0} 100`}
                       transform={`rotate(-90 ${metrics.mark / 2} ${metrics.mark / 2})`}
                     />
                   </svg>
@@ -427,12 +430,15 @@ export function HUDMarkStrip({
                       ? undefined
                       : Math.max(
                           ...vendors.map((v) =>
-                            labelWidth(meterLabel(v), metrics.font),
+                            labelWidth(
+                              meterLabel(v, quotaDisplay),
+                              metrics.font,
+                            ),
                           ),
                         ),
                   }}
                 >
-                  {meterLabel(vendor)}
+                  {meterLabel(vendor, quotaDisplay)}
                 </span>
               )}
             </button>

@@ -1,6 +1,8 @@
 import type { Quota, QuotaMeasure } from "@agent-hud/protocol";
 import {
   moneyShort,
+  quotaPercentLabel,
+  quotaDisplayLabel,
   monthDayTime,
   numberFormat,
   outlookText,
@@ -121,12 +123,12 @@ export function quotaMetric(
   if (measure === "quota") {
     result.detail = rowResetLabel(row, now, settings);
     if (finite(row.usedPercent)) {
-      result.value = `${Math.round(row.usedPercent)}%`;
+      result.value = quotaPercentLabel(row.usedPercent, settings.quotaDisplay);
       result.available = true;
       result.hint =
         row.status === "stale"
           ? stale
-          : `${row.name}: ${result.value} · ${result.detail}`;
+          : `${row.name}: ${result.value} · ${quotaDisplayLabel(settings.quotaDisplay, language)} · ${result.detail}`;
     } else if (row.observedAt) {
       // Read, but with no figure for this window.
       result.value = "N/A";
