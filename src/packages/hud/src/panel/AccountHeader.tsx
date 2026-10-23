@@ -72,6 +72,25 @@ export function AccountHeader({
   );
 }
 
+/** A block's notice where it has no account to stand under, as when its
+ * client is signed out: set like the notice under an account's name. */
+export function BlockNotice({ text, light }: { text: string; light: boolean }) {
+  const colors = palette(useGround(light));
+  return (
+    <div
+      className="hud-source-block-notice"
+      style={{
+        display: "grid",
+        padding: "2px 6px 0",
+        fontSize: 11,
+        lineHeight: "13px",
+      }}
+    >
+      <Notice text={text} color={colors.secondary} />
+    </div>
+  );
+}
+
 /** Shown whole or not at all; it gives way before anything else on its line. */
 function WholeOrNothing({
   children,

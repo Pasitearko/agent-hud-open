@@ -13,7 +13,8 @@ import { useFormat } from "@agent-hud/ui/format-context";
 import { dateFormat, localeDateTime, moneyAmount } from "@agent-hud/ui/format";
 import { quotaAccountKey, quotaShortName, vendorKey } from "../model";
 import { FittingName } from "./FittingName";
-import { AccountHeader } from "./AccountHeader";
+import { AccountHeader, BlockNotice } from "./AccountHeader";
+import { missingReadingNotice } from "./account-labels";
 import { ResetCreditsRow } from "./ResetCreditsRow";
 import { usePanelServices } from "../PanelContext";
 import { useGround } from "../ground";
@@ -550,6 +551,11 @@ export const SourceProviderBlock = memo(function SourceProviderBlock({
     });
   }, [rows, accountInfo]);
   const missingReading = !snapshot.quotas.some((row) => row.vendor === vendor);
+  // Without readings the block still says why, as a signed-out Claude Code
+  // asks to be signed in again.
+  const missingNotice = missingReading
+    ? missingReadingNotice(snapshot.providers, vendor)
+    : null;
   const countdown = layout.countdown ?? showReset;
   return (
     <section
@@ -621,16 +627,19 @@ export const SourceProviderBlock = memo(function SourceProviderBlock({
           active={active}
         />
       ) : missingReading ? (
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            color: colors.secondary,
-          }}
-        >
-          <span>{format.language === "zh" ? "额度" : "Quota"}</span>
-          <strong>--</strong>
-        </div>
+        <>
+          {missingNotice && <BlockNotice text={missingNotice} light={light} />}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              color: colors.secondary,
+            }}
+          >
+            <span>{format.language === "zh" ? "额度" : "Quota"}</span>
+            <strong>--</strong>
+          </div>
+        </>
       ) : (
         sections.map(({ key, rows: sectionRows, account, current }) => {
           // Earned resets belong to the signed-in Codex account.

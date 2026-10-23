@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   accountReadLabel,
+  missingReadingNotice,
   nextExpiryLabel,
 } from "../src/panel/account-labels.ts";
 
@@ -66,4 +67,19 @@ test("the first expiry is named only when every reset has one", () => {
     nextExpiryLabel({ availableCount: 1 }, "zh").full,
     "有效期未提供",
   );
+});
+
+test("a block without readings says why in its own provider's words", () => {
+  const signedOut =
+    "Claude Code is signed out. Run claude to sign in again and the quota returns";
+  const providers = [
+    { id: "claude", notice: signedOut },
+    { id: "codex", notice: null },
+    { id: "cursor", notice: "  " },
+  ];
+  assert.equal(missingReadingNotice(providers, "claude"), signedOut);
+  assert.equal(missingReadingNotice(providers, "codex"), null);
+  assert.equal(missingReadingNotice(providers, "cursor"), null);
+  assert.equal(missingReadingNotice(providers, "Claude"), null);
+  assert.equal(missingReadingNotice(providers, "kimi"), null);
 });

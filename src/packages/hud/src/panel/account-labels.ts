@@ -1,7 +1,7 @@
 // What an account's section says in words: whether it is current or when it
 // was last read, and when its earned resets expire. Kept apart from the
 // components so the tests can run them.
-import type { Account, ResetCredits } from "@agent-hud/protocol";
+import type { Account, Provider, ResetCredits } from "@agent-hud/protocol";
 import {
   countdownRough,
   dateFormat,
@@ -25,6 +25,18 @@ export function accountReadLabel(
     Math.max(0, (now - (Number.isFinite(checked) ? checked : now)) / 1000),
   );
   return language === "zh" ? `上次读取 ${ago} 前` : `Last read ${ago} ago`;
+}
+
+/** Why a detected agent's block has no reading, in its reader's words: a
+ * client signed out, a login without plan limits, a read that failed. Null
+ * when the reader said nothing. A block without readings is named by its
+ * provider's id, so only that provider speaks for it. */
+export function missingReadingNotice(
+  providers: readonly Pick<Provider, "id" | "notice">[],
+  vendor: string,
+): string | null {
+  const notice = providers.find((provider) => provider.id === vendor)?.notice;
+  return notice?.trim() ? notice : null;
 }
 
 /** The earliest expiry, whole and short (Open's CodexResetCreditsView
