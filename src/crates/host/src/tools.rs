@@ -279,10 +279,11 @@ mod tests {
     #[test]
     fn product_tool_changes_open_and_close_the_channel_without_a_snapshot() {
         for failed in [false, true] {
-            let temporary = tempfile::tempdir().unwrap();
+            // Leave room for the IPC socket under macOS's long temp path.
+            let temporary = tempfile::Builder::new().prefix("").tempdir().unwrap();
             // Let the IPC adapter create its own user-owned directory. An
             // elevated Windows process's ordinary tempdir can be group-owned.
-            let directory = temporary.path().join("ipc");
+            let directory = temporary.path().join("i");
             let product = Arc::new(product(false));
             let mut state = ChannelState::Disabled;
             let changed = json!({"enabled":true,"fail":failed});
