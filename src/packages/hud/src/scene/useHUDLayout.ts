@@ -74,11 +74,17 @@ export function useHUDLayout({
   const light =
     config.appearance === "light" ||
     (config.appearance === "system" && systemLight);
-  const surfaceAlpha = 1 - config.solidTransparency * 0.6;
+  // Transparency runs the ground from opaque to fully clear. Its outline and
+  // shadow belong to the ground and fade with it; logos, bots and text are
+  // drawn over it at full strength.
+  const surfaceAlpha = 1 - config.solidTransparency;
   const fill = light
     ? `rgba(245,245,247,${surfaceAlpha})`
     : `rgba(0,0,0,${surfaceAlpha})`;
-  const outline = light ? "#0000001b" : "#ffffff13";
+  const outline = light
+    ? `rgba(0,0,0,${0.106 * surfaceAlpha})`
+    : `rgba(255,255,255,${0.075 * surfaceAlpha})`;
+  const shadow = `0 9px 30px rgba(0,0,0,${0.133 * surfaceAlpha})`;
 
   // The agent the card is for: the sender of the event on show, otherwise the hovered mark. A dock never gives
   // its marks up to an event, so hovering another mark does not move an event's card (ScreenHUD.focus).
@@ -305,6 +311,7 @@ export function useHUDLayout({
     light,
     fill,
     outline,
+    shadow,
     sender,
     focusedVendor,
     delivery,

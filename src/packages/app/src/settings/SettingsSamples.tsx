@@ -120,7 +120,9 @@ export function SmallHUDPreview({
                 borderRadius: simple ? metrics.radius : "0 0 10px 10px",
                 background: simple ? surface : "transparent",
                 color: light ? "#161618" : "#f2f2f5",
-                boxShadow: simple ? "0 1px 3px #0002" : undefined,
+                boxShadow: simple
+                  ? `0 1px 3px rgba(0,0,0,${0.133 * alpha})`
+                  : undefined,
               }}
             >
               {sample.mode === "notch" && (

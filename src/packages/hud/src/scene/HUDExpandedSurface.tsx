@@ -45,6 +45,7 @@ export function HUDExpandedSurface({
   light,
   fill,
   outline,
+  shadow,
   nativePointer,
   entered,
   domExited,
@@ -84,6 +85,8 @@ export function HUDExpandedSurface({
   light: boolean;
   fill: string;
   outline: string;
+  /** The ground's shadow, fading with its transparency. */
+  shadow: string;
   nativePointer?: unknown;
   entered: (optionDown?: boolean) => void;
   domExited: (event?: { relatedTarget?: EventTarget | null }) => void;
@@ -241,8 +244,7 @@ export function HUDExpandedSurface({
                 (detached || config.mode === "simple") && !simplePeek
                   ? `1px solid ${outline}`
                   : "none",
-              boxShadow:
-                config.mode === "notch" ? undefined : "0 9px 30px #00000022",
+              boxShadow: config.mode === "notch" ? undefined : shadow,
             }}
           >
             {config.mode === "notch" && (

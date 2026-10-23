@@ -687,6 +687,12 @@ async fn hud_show_main(app: tauri::AppHandle, page: Option<String>) -> Result<()
         .map_err(|error| format!("Settings window worker failed: {error}"))?
 }
 
+/// Quit from the Settings and Statistics windows' menu, as the menu bar's Quit.
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 /// The menu bar's Refresh data: a collection pass that reads accounts again.
 fn refresh_data(app: &tauri::AppHandle) {
     let app = app.clone();
@@ -845,6 +851,7 @@ pub fn run_with_options(
             hud::hud_drag_start,
             hud::hud_text_focus,
             hud_show_main,
+            quit_app,
             open_statistics,
             take_statistics_target,
             take_settings_page,

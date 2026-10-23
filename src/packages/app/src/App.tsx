@@ -472,13 +472,15 @@ function AppContent({
         >
           {chinese ? "用量统计…" : "Statistics…"}
         </DropdownMenuItem>
-        <DropdownMenuItem
-          onClick={() => {
-            if (isTauri()) void invoke("hud_show_main");
-          }}
-        >
-          {chinese ? "设置…" : "Settings…"}
-        </DropdownMenuItem>
+        {statistics && (
+          <DropdownMenuItem
+            onClick={() => {
+              if (isTauri()) void invoke("hud_show_main");
+            }}
+          >
+            {chinese ? "设置…" : "Settings…"}
+          </DropdownMenuItem>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={toggleHUDVisibility}>
           {hudVisible
@@ -489,13 +491,18 @@ function AppContent({
               ? "显示 HUD"
               : "Show HUD"}
         </DropdownMenuItem>
-        <DropdownMenuItem
-          onClick={() => {
-            void refresh();
-          }}
-        >
-          {chinese ? "刷新数据" : "Refresh data"}
-        </DropdownMenuItem>
+        {isTauri() && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() => {
+                void invoke("quit_app");
+              }}
+            >
+              {chinese ? "退出" : "Quit"}
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

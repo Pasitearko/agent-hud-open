@@ -431,6 +431,7 @@ export function HUDScene({
     light,
     fill,
     outline,
+    shadow,
     sender,
     focusedVendor,
     delivery,
@@ -895,6 +896,7 @@ export function HUDScene({
             light={light}
             fill={fill}
             outline={outline}
+            shadow={shadow}
             nativePointer={nativePointer}
             entered={entered}
             domExited={domExited}
