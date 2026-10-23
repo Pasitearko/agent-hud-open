@@ -104,6 +104,52 @@ impl Request {
             .and_then(|value| crate::Cursor::parse(&value))
     }
 }
+/// Bodies under this size gain too little from compression to be worth it.
+const COMPRESS_FROM: usize = 1024;
+
+impl Request {
+    /// Whether the client accepts a gzip body (`gzip` or `*` without `q=0`).
+    pub fn accepts_gzip(&self) -> bool {
+        self.headers.get("accept-encoding").is_some_and(|value| {
+            value.split(',').any(|item| {
+                let mut parts = item.split(';').map(str::trim);
+                let coding = parts.next().unwrap_or_default().to_ascii_lowercase();
+                let refused = parts.any(|p| {
+                    p.strip_prefix("q=")
+                        .and_then(|q| q.trim().parse::<f32>().ok())
+                        .is_some_and(|q| q <= 0.0)
+                });
+                (coding == "gzip" || coding == "*") && !refused
+            })
+        })
+    }
+}
+
+/// One rule for every LAN reply body, whatever path the client came by (LAN or
+/// Tailscale): gzip when the client accepts it and the body is large enough.
+/// Returns the body to send and the headers that describe it. The ETag and the
+/// revision stay those of the uncompressed content.
+pub fn encode_body(request: &Request, body: Vec<u8>) -> (Vec<u8>, Vec<(&'static str, String)>) {
+    use std::io::Write;
+    if body.len() < COMPRESS_FROM || !request.accepts_gzip() {
+        return (body, vec![("Vary", "Accept-Encoding".into())]);
+    }
+    let mut encoder = flate2::write::GzEncoder::new(
+        Vec::with_capacity(body.len() / 4),
+        flate2::Compression::default(),
+    );
+    match encoder.write_all(&body).and_then(|_| encoder.finish()) {
+        Ok(compressed) if compressed.len() < body.len() => (
+            compressed,
+            vec![
+                ("Content-Encoding", "gzip".into()),
+                ("Vary", "Accept-Encoding".into()),
+            ],
+        ),
+        _ => (body, vec![("Vary", "Accept-Encoding".into())]),
+    }
+}
+
 pub fn response(status: u16, headers: &[(&str, String)], body: &[u8]) -> Vec<u8> {
     let reason = match status {
         200 => "OK",
@@ -153,4 +199,53 @@ fn decode_query(value: &str) -> Option<String> {
         }
     }
     String::from_utf8(out).ok()
+}
+
+#[cfg(test)]
+mod encoding_tests {
+    use super::*;
+    use std::io::Read;
+
+    fn request(accept: Option<&str>) -> Request {
+        let mut headers = BTreeMap::new();
+        if let Some(value) = accept {
+            headers.insert("accept-encoding".to_string(), value.to_string());
+        }
+        Request {
+            method: "GET".into(),
+            path: "/v1/snapshot".into(),
+            query: None,
+            headers,
+            body: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn gzip_is_accepted_only_when_offered() {
+        assert!(request(Some("gzip, deflate, br")).accepts_gzip());
+        assert!(request(Some("br;q=1.0, gzip;q=0.8")).accepts_gzip());
+        assert!(request(Some("*")).accepts_gzip());
+        assert!(!request(Some("gzip;q=0")).accepts_gzip());
+        assert!(!request(Some("br, deflate")).accepts_gzip());
+        assert!(!request(None).accepts_gzip());
+    }
+
+    #[test]
+    fn large_bodies_are_gzipped_for_clients_that_accept_it() {
+        let body = serde_json::to_vec(&vec!["session turn text"; 400]).unwrap();
+        let (sent, headers) = encode_body(&request(Some("gzip, deflate, br")), body.clone());
+        assert!(headers.contains(&("Content-Encoding", "gzip".to_string())));
+        assert!(sent.len() < body.len() / 4);
+        let mut decoded = Vec::new();
+        flate2::read::GzDecoder::new(&sent[..])
+            .read_to_end(&mut decoded)
+            .unwrap();
+        assert_eq!(decoded, body);
+        // No offer, or a small body: sent as it is.
+        let (plain, headers) = encode_body(&request(None), body.clone());
+        assert_eq!(plain, body);
+        assert!(!headers.iter().any(|(k, _)| *k == "Content-Encoding"));
+        let small = b"{\"records\":[]}".to_vec();
+        assert_eq!(encode_body(&request(Some("gzip")), small.clone()).0, small);
+    }
 }

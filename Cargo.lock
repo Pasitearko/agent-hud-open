@@ -107,6 +107,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "core-foundation 0.10.1",
+ "flate2",
  "libc",
  "qrcode",
  "rustls",

@@ -3,7 +3,7 @@
 use super::{
     cache::SnapshotCache,
     credentials::{Authorization, Credentials},
-    http::{response, Parse, Request},
+    http::{encode_body, response, Parse, Request},
     identity::Identity,
     *,
 };
@@ -658,11 +658,10 @@ fn connection<R: Record>(shared: &Shared<R>, socket: TcpStream, address: SocketA
         }
         let body = cache.body()?.ok_or("LAN snapshot unavailable")?;
         drop(cache);
-        reply(
-            200,
-            &[("ETag", etag), ("Content-Type", "application/json".into())],
-            &body,
-        )
+        let (body, encoding) = encode_body(&request, body);
+        let mut headers = vec![("ETag", etag), ("Content-Type", "application/json".into())];
+        headers.extend(encoding);
+        reply(200, &headers, &body)
     } else {
         let Some(cursor) = request.cursor() else {
             drop(cache);
@@ -674,11 +673,10 @@ fn connection<R: Record>(shared: &Shared<R>, socket: TcpStream, address: SocketA
         };
         let body = serde_json::to_vec(&changes).map_err(|_| "LAN changes encoding")?;
         drop(cache);
-        reply(
-            200,
-            &[("ETag", etag), ("Content-Type", "application/json".into())],
-            &body,
-        )
+        let (body, encoding) = encode_body(&request, body);
+        let mut headers = vec![("ETag", etag), ("Content-Type", "application/json".into())];
+        headers.extend(encoding);
+        reply(200, &headers, &body)
     }
 }
 fn remember_peer<R>(
