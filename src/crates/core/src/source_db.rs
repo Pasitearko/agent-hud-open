@@ -321,7 +321,14 @@ impl AgentHudCore {
                     log.source_state["hasOtel"] = json!(true);
                 }
             }
-            log.count_source(record.key, &record.model, record.at, record.usage, false);
+            log.count_timed_source(
+                record.key,
+                &record.model,
+                record.at,
+                record.usage,
+                false,
+                record.duration_ms,
+            );
             mappings.push((
                 stamp.source.to_owned(),
                 record.id,

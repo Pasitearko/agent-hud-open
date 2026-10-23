@@ -231,3 +231,75 @@ fn opencode_generation_paging_resumes_and_unchanged_snapshots_do_no_source_write
     );
     assert_eq!(backend.last_synced_at_ms, committed);
 }
+
+/// Each call's (output, duration) in the ledger, by output.
+fn timed_calls(backend: &AgentHudCore) -> Vec<(i64, Option<i64>)> {
+    let db = backend.database.as_ref().unwrap();
+    let mut statement = db
+        .prepare("SELECT output,duration_ms FROM usage_meter_event ORDER BY output")
+        .unwrap();
+    let rows = statement
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
+#[test]
+fn opencode_times_a_reply_only_when_it_called_no_tools() {
+    let root = tempfile::tempdir().unwrap();
+    let db = source(root.path());
+    let created = chrono::Utc::now().timestamp_millis() - 60_000;
+    let reply = |finish: &str, output: u64| {
+        json!({
+            "role":"assistant",
+            "time":{"created":created,"completed":created + 4_000},
+            "finish":finish,
+            "modelID":"gpt-5","providerID":"openai",
+            "tokens":{"input":10,"output":output}
+        })
+        .to_string()
+    };
+    db.execute(
+        "INSERT INTO message VALUES('a','s',?1),('b','s',?2)",
+        [reply("stop", 100), reply("tool-calls", 50)],
+    )
+    .unwrap();
+    let mut backend = core(root.path());
+    refresh(&mut backend);
+    assert_eq!(timed_calls(&backend), [(50, None), (100, Some(4_000))]);
+}
+
+#[test]
+fn grok_inference_records_keep_the_model_calls_own_time() {
+    let root = tempfile::tempdir().unwrap();
+    let logs = root.path().join("logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    let at = |offset: i64| {
+        chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
+            chrono::Utc::now().timestamp_millis() - 60_000 + offset,
+        )
+        .unwrap()
+        .to_rfc3339()
+    };
+    let lines = [
+        json!({"msg":"shell.turn.inference_done","sid":"g1","ts":at(0),"event_id":"e1","ctx":{"prompt_tokens":1000,"completion_tokens":200,"model_elapsed_ms":4734,"elapsed_since_turn_start_ms":13684}}),
+        json!({"msg":"shell.turn.inference_done","sid":"g1","ts":at(9_000),"event_id":"e2","ctx":{"prompt_tokens":1200,"completion_tokens":300}}),
+    ];
+    std::fs::write(
+        logs.join("unified.jsonl"),
+        lines
+            .iter()
+            .map(|line| format!("{line}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let mut backend = AgentHudCore::new(
+        vec![SourceRoot {
+            path: logs,
+            provider: "grok-cli",
+        }],
+        root.path().join("hud"),
+    );
+    refresh(&mut backend);
+    assert_eq!(timed_calls(&backend), [(200, Some(4_734)), (300, None)]);
+}

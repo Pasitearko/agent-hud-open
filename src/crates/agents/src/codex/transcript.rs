@@ -9,6 +9,24 @@ use serde_json::{json, Value};
 
 impl Log {
     pub fn meter_codex_call(&mut self, value: &Value) {
+        // A reply is timed from the newest request-side line (a prompt, a tool
+        // result) to its `token_usage_record`, written as the reply finishes.
+        // The token count that closes the call comes after the tool results,
+        // so its own time holds the tool runs. A fork's copied history times
+        // nothing.
+        if !self.live.inherited(value) {
+            if let Some(at) = value["timestamp"].as_str().and_then(metering::date_ms) {
+                if value["type"] == "token_usage_record" {
+                    let took = self.call_timing.since_request(0, at);
+                    self.call_timing.replies.push(took);
+                    self.call_timing.request_at[0] = Some(at);
+                    return;
+                }
+                if codex_request_side(value) {
+                    self.call_timing.request_at[0] = Some(at);
+                }
+            }
+        }
         // Codex writes a call's tool requests before the token count that
         // closes it (agent-hud-native-open CallTools.codex); a fork's copied history
         // asks for nothing.
@@ -62,6 +80,13 @@ impl Log {
             return;
         }
         let tools = std::mem::take(&mut self.pending_tools);
+        // One reply per count. A count that closes two replies (under 1 % of
+        // counts) is not timed: which one it counts cannot be told.
+        let replies = std::mem::take(&mut self.call_timing.replies);
+        let duration_ms = match replies.as_slice() {
+            [took] => *took,
+            _ => None,
+        };
         if self.live.inherited(value) {
             return;
         }
@@ -87,6 +112,7 @@ impl Log {
                 .as_u64()
                 .filter(|window| *window > 0),
             tools,
+            duration_ms,
         };
         let counted = event.usage;
         self.usage.add(counted);
@@ -376,6 +402,22 @@ impl LiveLog {
             }
             _ => self.touch_running(at),
         }
+    }
+}
+
+/// A line written before a reply's request goes out: a turn's start, the
+/// person's message, or a tool's result.
+fn codex_request_side(value: &Value) -> bool {
+    let payload = &value["payload"];
+    match (value["type"].as_str(), payload["type"].as_str()) {
+        (Some("event_msg"), Some("task_started" | "user_message")) => true,
+        (Some("event_msg"), Some("item_completed")) => payload["item"]["type"] == "UserMessage",
+        (
+            Some("response_item"),
+            Some("function_call_output" | "custom_tool_call_output" | "local_shell_call_output"),
+        ) => true,
+        (Some("response_item"), Some("message")) => payload["role"] == "user",
+        _ => false,
     }
 }
 

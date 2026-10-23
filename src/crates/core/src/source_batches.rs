@@ -201,6 +201,9 @@ fn grok(db: &Connection, path: &str, g: &str, offset: u64, v: &Value) -> rusqlit
         model.as_deref(),
         process.as_deref(),
         fallback.as_deref(),
+        // The model call's own time; the record's elapsed_since_turn_start_ms
+        // also holds the turn's tool runs.
+        number(&ctx["model_elapsed_ms"]).and_then(|ms| i64::try_from(ms).ok()),
     )?;
     Ok(())
 }
@@ -269,6 +272,7 @@ fn copilot(db: &Connection, path: &str, g: &str, offset: u64, v: &Value) -> rusq
         read as i64,
         model,
         trace,
+        None,
         None,
     )?;
     Ok(())
@@ -413,6 +417,7 @@ pub(super) fn read(
             parent: None,
             archived: false,
             updated: None,
+            duration_ms: r.duration_ms.and_then(|ms| u64::try_from(ms).ok()),
         });
     }
     let next_emitted = last.max(emitted);

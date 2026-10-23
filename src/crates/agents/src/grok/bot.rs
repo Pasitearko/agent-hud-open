@@ -65,6 +65,7 @@ pub fn read(path: &Path, cursor: &Value) -> rusqlite::Result<Page> {
             parent: None,
             archived: false,
             updated: None,
+            duration_ms: None,
         });
     }
     if grok_cache::account(dir).as_deref() != Some(account.as_str()) {

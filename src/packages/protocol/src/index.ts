@@ -52,6 +52,8 @@ export interface QuotaMetrics {
     tokensPerSecond: number;
     calls: number;
     tokensOut: number;
+    /** No call was timed by its log: spans are gaps between calls, so the rate is at least this. */
+    lowerBound?: boolean;
   } | null;
   /** Source tally first; otherwise matching ledger usage within the known cycle. */
   consumed: { used: number; capacity: number | null; unit?: string } | null;
@@ -573,6 +575,7 @@ export interface BillingPeriod {
     tokensPerSecond: number;
     calls: number;
     tokensOut: number;
+    lowerBound?: boolean;
   } | null;
   consumed: { used: number; capacity: null; unit: "tokens" } | null;
   tokensPerHour: number | null;

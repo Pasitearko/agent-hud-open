@@ -42,6 +42,9 @@ impl Log {
                 if let Some(model) = text(&v["model"]).filter(|s| !s.starts_with("__")) {
                     self.model = model.into();
                 }
+                // A call is timed from its request to its usage line. The
+                // step's own timing comes after the usage line, in `step.end`.
+                self.call_timing.request_at[0] = at(&v["time"]);
                 return;
             }
             if let Some(at) = at(&v["time"]) {
@@ -86,7 +89,9 @@ impl Log {
                 .filter(|s| !s.starts_with("__"))
                 .unwrap_or(&self.model)
                 .to_owned();
-            self.count_source(
+            let duration_ms = self.call_timing.since_request(0, at);
+            self.call_timing.request_at[0] = None;
+            self.count_timed_source(
                 format!("{}:o{}", self.id, self.meter_line_start),
                 &format!("{model}#kimi-code"),
                 at,
@@ -98,6 +103,7 @@ impl Log {
                     reasoning: 0,
                 },
                 false,
+                duration_ms,
             );
         } else {
             let p = &v["message"]["payload"];

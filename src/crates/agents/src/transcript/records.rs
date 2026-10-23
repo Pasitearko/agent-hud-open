@@ -16,6 +16,9 @@ pub struct Record {
     pub parent: Option<String>,
     pub archived: bool,
     pub updated: Option<i64>,
+    /// How long the call itself took, where the client records it
+    /// (`metering::Event::duration_ms`).
+    pub duration_ms: Option<u64>,
 }
 
 pub struct Page {

@@ -225,7 +225,7 @@ pub(crate) fn write(
     for event in events.iter().filter(|event| event.at >= cutoff) {
         let old = {
             let mut s = db.prepare_cached(
-                "SELECT model,at_ms,input,output,cache_read,cache_write,reasoning,context_window,tools FROM usage_meter_event WHERE contribution=?1 AND event_key=?2",
+                "SELECT model,at_ms,input,output,cache_read,cache_write,reasoning,context_window,tools,duration_ms FROM usage_meter_event WHERE contribution=?1 AND event_key=?2",
             )?;
             let mut rows = s.query(params![path, event.key])?;
             rows.next()?
@@ -237,6 +237,8 @@ pub(crate) fn write(
                         r.get::<_, Option<i64>>(7)?
                             .and_then(|n| u64::try_from(n).ok()),
                         tools_from(r.get::<_, Option<String>>(8)?),
+                        r.get::<_, Option<i64>>(9)?
+                            .and_then(|n| u64::try_from(n).ok()),
                     ))
                 })
                 .transpose()?
@@ -247,16 +249,31 @@ pub(crate) fn write(
             &event.model
         }
         .to_owned();
-        if old
+        let same_usage = old
             .as_ref()
-            .is_some_and(|(old_model, at, usage, window, tools)| {
+            .is_some_and(|(old_model, at, usage, window, tools, _)| {
                 *old_model == model
                     && *at == event.at
                     && *usage == event.usage
                     && *window == event.context_window
                     && *tools == event.tools
-            })
-        {
+            });
+        if same_usage {
+            // A call whose later lines only time it (a Claude response's
+            // last block, read a pass after its first) changes no bucket
+            // and no gap.
+            if old.as_ref().is_some_and(|old| old.5 != event.duration_ms) {
+                db.execute(
+                    "UPDATE usage_meter_event SET duration_ms=?3,updated_at_ms=?4 WHERE contribution=?1 AND event_key=?2",
+                    params![
+                        path,
+                        event.key,
+                        event.duration_ms.map(integer).transpose()?,
+                        now_ms
+                    ],
+                )?;
+                changed = true;
+            }
             continue;
         }
         changed = true;
@@ -266,8 +283,8 @@ pub(crate) fn write(
             old_next = successor(db, path, at, &event.key)?;
         }
         db.execute(
-            "INSERT INTO usage_meter_event(contribution,event_key,source,model,at_ms,input,output,cache_read,cache_write,reasoning,updated_at_ms,context_window,tools)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+            "INSERT INTO usage_meter_event(contribution,event_key,source,model,at_ms,input,output,cache_read,cache_write,reasoning,updated_at_ms,context_window,tools,duration_ms)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
              ON CONFLICT(contribution,event_key) DO UPDATE SET
                model=excluded.model,
                at_ms=excluded.at_ms,
@@ -278,7 +295,8 @@ pub(crate) fn write(
                reasoning=excluded.reasoning,
                updated_at_ms=excluded.updated_at_ms,
                context_window=excluded.context_window,
-               tools=excluded.tools",
+               tools=excluded.tools,
+               duration_ms=excluded.duration_ms",
             params![
                 path,
                 event.key,
@@ -293,6 +311,7 @@ pub(crate) fn write(
                 now_ms,
                 event.context_window.map(integer).transpose()?,
                 tools_text(&event.tools),
+                event.duration_ms.map(integer).transpose()?,
             ],
         )?;
         bucket_delta(db, path, source, &model, event.at, event.usage, 1, now_ms)?;
@@ -720,6 +739,8 @@ pub(crate) struct EventRow {
     pub at: i64,
     pub usage: Usage,
     pub gap: Option<i64>,
+    /// How long the call itself took, where its log records it.
+    pub duration: Option<i64>,
 }
 
 pub(crate) fn query_events_between(
@@ -762,6 +783,7 @@ pub(crate) fn query_events_between(
                 reasoning: count(7)?,
             },
             gap: None,
+            duration: None,
         });
     }
     Ok(result)
@@ -777,7 +799,7 @@ pub(crate) fn query_deepseek_billing_events(
     let mut s = db
         .prepare(
             "WITH selected(contribution) AS(SELECT value FROM json_each(?1))
-             SELECT model,at_ms,input,output,cache_read,cache_write,reasoning,gap_ms
+             SELECT model,at_ms,input,output,cache_read,cache_write,reasoning,gap_ms,duration_ms
              FROM usage_meter_event JOIN selected USING(contribution)
              WHERE source='deepseek' AND model LIKE '%#deepseek-official' AND at_ms>=?2
              ORDER BY at_ms,event_key",
@@ -805,6 +827,7 @@ pub(crate) fn query_deepseek_billing_events(
                 reasoning: count(6)?,
             },
             gap: r.get(7).map_err(|_| "Invalid billed gap")?,
+            duration: r.get(8).map_err(|_| "Invalid billed duration")?,
         });
     }
     Ok(events)
@@ -937,7 +960,9 @@ pub(crate) struct Meters {
 #[derive(Default)]
 pub(crate) struct View {
     buckets: Vec<Bucket>,
-    replies: HashMap<(String, String, bool), (u64, u64, u64)>,
+    /// (source, model, within the hour, timed by its log) → (output +
+    /// reasoning, span ms, calls).
+    replies: HashMap<(String, String, bool, bool), (u64, u64, u64)>,
     pub loaded_at: i64,
     pub valid_until: Option<i64>,
     /// The selected logs the parts were read for, sorted.
@@ -960,14 +985,85 @@ struct Bucket {
 struct Part {
     /// (key, bucket start, usage)
     buckets: Vec<(u32, i64, Usage)>,
-    /// Calls that end a reply span of at most 120 s, from a week before the
-    /// part was read on: (key, span start, call time, output + reasoning, span).
-    replies: Vec<(u32, i64, i64, u64, u64)>,
+    /// Calls that count toward the reply rate (`reply_span`), from a week
+    /// before the part was read on.
+    replies: Vec<Reply>,
     /// Times of this log's calls after the part was read (a clock behind).
     later: Vec<i64>,
 }
 
+struct Reply {
+    key: u32,
+    start: i64,
+    at: i64,
+    /// Output + reasoning.
+    tokens: u64,
+    span: u64,
+    /// Whether the log timed the call, rather than the gap since its
+    /// previous call.
+    timed: bool,
+}
+
+impl Reply {
+    /// A call read as at_ms, duration_ms, gap_ms, output + reasoning from
+    /// column `at`; None when it does not count.
+    fn read(key: u32, r: &rusqlite::Row<'_>, at: usize) -> rusqlite::Result<Option<Self>> {
+        let call_at: i64 = r.get(at)?;
+        let tokens = unsigned(r, at + 3)?;
+        Ok(
+            reply_span(tokens, r.get(at + 1)?, r.get(at + 2)?).map(|(span, timed)| Self {
+                key,
+                start: call_at - span as i64,
+                at: call_at,
+                tokens,
+                span,
+                timed,
+            }),
+        )
+    }
+}
+
 const WEEK_MS: i64 = 7 * 86_400_000;
+
+/// The calls the reply rate reads, as SQL over `usage_meter_event`: what
+/// `reply_span` keeps, before its rate check.
+const REPLY_ROWS: &str = "output+reasoning>=10 AND (duration_ms BETWEEN 100 AND 600000
+     OR (duration_ms IS NULL AND gap_ms BETWEEN 100 AND 120000))";
+
+/// How a call counts toward the reply rate: its span and whether its log
+/// timed it. A call the log timed counts its own time, up to 10 minutes; one
+/// it did not counts the gap since its log's previous call, up to 120 s,
+/// since a longer gap is the person's or a tool's. None for a call of under
+/// 10 output tokens, a span under 100 ms, or over 10,000 tokens per second.
+pub(crate) fn reply_span(
+    tokens: u64,
+    duration: Option<i64>,
+    gap: Option<i64>,
+) -> Option<(u64, bool)> {
+    let (span, timed, cap) = match duration {
+        Some(duration) => (duration, true, 600_000),
+        None => (gap?, false, 120_000),
+    };
+    let span = u64::try_from(span)
+        .ok()
+        .filter(|span| (100..=cap).contains(span))?;
+    (tokens >= 10 && tokens <= span.saturating_mul(10)).then_some((span, timed))
+}
+
+/// The reply rate of the calls in `sums` ([gap-timed, log-timed] output,
+/// span and calls): the calls their logs timed when there are any, else the
+/// gap-timed ones, whose spans hold tool runs and the person's time, so the
+/// rate is a lower bound.
+pub(crate) fn reply_rate(sums: [(u64, u64, u64); 2]) -> Option<Value> {
+    let (lower_bound, (output, span, calls)) = if sums[1].1 > 0 {
+        (false, sums[1])
+    } else {
+        (true, sums[0])
+    };
+    (span > 0).then(|| {
+        json!({"tokensPerSecond":output as f64/(span as f64/1000.0),"calls":calls,"tokensOut":output,"lowerBound":lower_bound})
+    })
+}
 
 impl View {
     pub fn load(
@@ -1008,17 +1104,17 @@ impl View {
             }
         }
         {
-            let mut s = db.prepare(
-                "SELECT contribution,source,model,at_ms,gap_ms,output+reasoning
+            let mut s = db.prepare(&format!(
+                "SELECT contribution,source,model,at_ms,duration_ms,gap_ms,output+reasoning
                  FROM meter_selected CROSS JOIN usage_meter_event USING(contribution)
-                 WHERE at_ms>=?1 AND gap_ms>0 AND gap_ms<=120000",
-            )?;
+                 WHERE at_ms>=?1 AND {REPLY_ROWS}"
+            ))?;
             let mut rows = s.query([now - WEEK_MS])?;
             while let Some(r) = rows.next()? {
                 let key = view.key(r.get(1)?, r.get(2)?);
-                let (at, gap): (i64, i64) = (r.get(3)?, r.get(4)?);
-                let row = (key, at - gap, at, unsigned(r, 5)?, gap as u64);
-                view.parts.entry(r.get(0)?).or_default().replies.push(row);
+                if let Some(reply) = Reply::read(key, r, 3)? {
+                    view.parts.entry(r.get(0)?).or_default().replies.push(reply);
+                }
             }
         }
         {
@@ -1072,16 +1168,16 @@ impl View {
                 }
             }
             {
-                let mut s = db.prepare_cached(
-                    "SELECT source,model,at_ms,gap_ms,output+reasoning FROM usage_meter_event
-                     WHERE contribution=?1 AND at_ms>=?2 AND gap_ms>0 AND gap_ms<=120000",
-                )?;
+                let mut s = db.prepare_cached(&format!(
+                    "SELECT source,model,at_ms,duration_ms,gap_ms,output+reasoning FROM usage_meter_event
+                     WHERE contribution=?1 AND at_ms>=?2 AND {REPLY_ROWS}"
+                ))?;
                 let mut rows = s.query(params![path, now - WEEK_MS])?;
                 while let Some(r) = rows.next()? {
                     let key = self.key(r.get(0)?, r.get(1)?);
-                    let (at, gap): (i64, i64) = (r.get(2)?, r.get(3)?);
-                    part.replies
-                        .push((key, at - gap, at, unsigned(r, 4)?, gap as u64));
+                    if let Some(reply) = Reply::read(key, r, 2)? {
+                        part.replies.push(reply);
+                    }
                 }
             }
             {
@@ -1162,27 +1258,27 @@ impl View {
     pub fn refresh_clock(&mut self, now: i64) {
         let hour = now - 3_600_000;
         let week = now - WEEK_MS;
-        let mut sums = HashMap::<(u32, bool), (u64, u64, u64)>::new();
+        let mut sums = HashMap::<(u32, bool, bool), (u64, u64, u64)>::new();
         let mut valid_until: Option<i64> = None;
         let mut bound =
             |at: i64| valid_until = Some(valid_until.map_or(at, |old: i64| old.min(at)));
         for part in self.parts.values_mut() {
             // A span that has left the week never counts again.
             part.replies
-                .retain(|(_, start, at, _, _)| *start >= week && *at >= week);
-            for (key, start, at, tokens, gap) in &part.replies {
-                if *at > now {
+                .retain(|reply| reply.start >= week && reply.at >= week);
+            for reply in &part.replies {
+                if reply.at > now {
                     continue;
                 }
-                let recent = *start >= hour;
-                let sum = sums.entry((*key, recent)).or_default();
-                sum.0 += tokens;
-                sum.1 += gap;
+                let recent = reply.start >= hour;
+                let sum = sums.entry((reply.key, recent, reply.timed)).or_default();
+                sum.0 += reply.tokens;
+                sum.1 += reply.span;
                 sum.2 += 1;
                 if recent {
-                    bound(start + 3_600_001);
+                    bound(reply.start + 3_600_001);
                 }
-                bound(start + 604_800_001);
+                bound(reply.start + 604_800_001);
             }
             if let Some(next) = part.later.iter().copied().filter(|at| *at > now).min() {
                 bound(next);
@@ -1190,9 +1286,9 @@ impl View {
         }
         self.replies = sums
             .into_iter()
-            .map(|((key, recent), sum)| {
+            .map(|((key, recent, timed), sum)| {
                 let (source, model) = &self.keys[key as usize];
-                ((source.clone(), model.clone(), recent), sum)
+                ((source.clone(), model.clone(), recent, timed), sum)
             })
             .collect();
         self.valid_until = valid_until;
@@ -1345,18 +1441,17 @@ impl View {
         };
         if reply_complete && consumer {
             for recent in [true, false] {
-                let mut output = 0;
-                let mut span = 0;
-                let mut calls = 0;
-                for ((s, m, hour), (o, g, c)) in &self.replies {
+                let mut sums = [(0, 0, 0); 2];
+                for ((s, m, hour, timed), (o, g, c)) in &self.replies {
                     if matches(s, m) && (!recent || *hour) {
-                        output += o;
-                        span += g;
-                        calls += c;
+                        let sum = &mut sums[usize::from(*timed)];
+                        sum.0 += o;
+                        sum.1 += g;
+                        sum.2 += c;
                     }
                 }
-                if span > 0 {
-                    reply = json!({"tokensPerSecond":output as f64/(span as f64/1000.0),"calls":calls,"tokensOut":output});
+                if let Some(rate) = reply_rate(sums) {
+                    reply = rate;
                     break;
                 }
             }
@@ -1395,7 +1490,22 @@ impl View {
             consumed = row["nativeUsage"].clone();
         }
         if reply.is_null() {
-            unavailable.insert("tokens".into(),json!(if !reply_complete{l10n::text("本地用量账本仍在索引", "The local usage ledger is still indexing.")}else if consumer{l10n::text("最近七天没有观察到间隔 120 秒以内的连续回复调用", "No adjacent reply calls within 120 seconds were observed in the last seven days.")}else{reason.clone()}));
+            unavailable.insert(
+                "tokens".into(),
+                json!(if !reply_complete {
+                    l10n::text(
+                        "本地用量账本仍在索引",
+                        "The local usage ledger is still indexing.",
+                    )
+                } else if consumer {
+                    l10n::text(
+                        "最近七天没有可计时的回复调用",
+                        "No reply calls that could be timed were observed in the last seven days.",
+                    )
+                } else {
+                    reason.clone()
+                }),
+            );
         }
         if consumed.is_null() {
             unavailable.insert("consumed".into(), json!(reason.clone()));
@@ -1814,7 +1924,7 @@ mod retention_tests {
         paths: &[String],
         now: i64,
     ) -> (
-        HashMap<(String, String, bool), (u64, u64, u64)>,
+        HashMap<(String, String, bool, bool), (u64, u64, u64)>,
         Vec<(String, String, i64, Usage)>,
     ) {
         db.execute("DELETE FROM meter_selected", []).unwrap();
@@ -1826,12 +1936,20 @@ mod retention_tests {
             .unwrap();
         }
         let mut replies = HashMap::new();
+        // A call its log timed counts its own time (100 ms to 10 min), one
+        // it did not the gap since the log's previous call (100 ms to 120 s);
+        // at least 10 output tokens, at most 10,000 a second.
         let mut s = db
             .prepare(
-                "SELECT source,model,at_ms-gap_ms>=?1,sum(output+reasoning),sum(gap_ms),count(*)
-             FROM meter_selected CROSS JOIN usage_meter_event USING(contribution)
-             WHERE at_ms>=?2 AND at_ms<=?3 AND at_ms-gap_ms>=?2 AND gap_ms>0 AND gap_ms<=120000
-             GROUP BY source,model,at_ms-gap_ms>=?1",
+                "SELECT source,model,at_ms-span>=?1,timed,sum(tokens),sum(span),count(*) FROM (
+                   SELECT source,model,at_ms,output+reasoning AS tokens,
+                          coalesce(duration_ms,gap_ms) AS span,duration_ms IS NOT NULL AS timed
+                   FROM meter_selected CROSS JOIN usage_meter_event USING(contribution)
+                   WHERE at_ms>=?2 AND at_ms<=?3
+                     AND (duration_ms BETWEEN 100 AND 600000
+                          OR (duration_ms IS NULL AND gap_ms BETWEEN 100 AND 120000)))
+                 WHERE at_ms-span>=?2 AND tokens>=10 AND tokens<=10*span
+                 GROUP BY source,model,at_ms-span>=?1,timed",
             )
             .unwrap();
         let mut rows = s
@@ -1839,11 +1957,16 @@ mod retention_tests {
             .unwrap();
         while let Some(r) = rows.next().unwrap() {
             replies.insert(
-                (r.get(0).unwrap(), r.get(1).unwrap(), r.get(2).unwrap()),
                 (
-                    unsigned(r, 3).unwrap(),
+                    r.get(0).unwrap(),
+                    r.get(1).unwrap(),
+                    r.get(2).unwrap(),
+                    r.get(3).unwrap(),
+                ),
+                (
                     unsigned(r, 4).unwrap(),
                     unsigned(r, 5).unwrap(),
+                    unsigned(r, 6).unwrap(),
                 ),
             );
         }
@@ -1865,7 +1988,7 @@ mod retention_tests {
     fn kept(
         view: &View,
     ) -> (
-        HashMap<(String, String, bool), (u64, u64, u64)>,
+        HashMap<(String, String, bool, bool), (u64, u64, u64)>,
         Vec<(String, String, i64, Usage)>,
     ) {
         let mut buckets = view
@@ -1894,8 +2017,14 @@ mod retention_tests {
             },
             ..Default::default()
         };
+        let timed = |key: &str, model: &str, at: i64, output: u64, took: u64| Event {
+            duration_ms: Some(took),
+            ..call(key, model, at, output)
+        };
         // Spans inside and outside the hour, one longer than 120 s, one a
-        // week back, one stamped ahead of the clock, and a log not selected.
+        // week back, one stamped ahead of the clock, and a log not selected;
+        // calls their logs timed, one over 10 minutes, one too fast to be
+        // a reply.
         write(
             &db,
             "/logs/a.jsonl",
@@ -1908,6 +2037,15 @@ mod retention_tests {
                 call("a5", "claude-sonnet-4-5", now - 600_000, 50),
                 call("a6", "claude-sonnet-4-5", now - 590_000, 60),
                 call("a7", "claude-opus-4-5", now - 400_000, 70),
+                timed("a8", "claude-sonnet-4-5", now - 300_000, 80, 4_000),
+                timed("a9", "claude-sonnet-4-5", now - 200_000, 90, 700_000),
+                timed(
+                    "a10",
+                    "claude-sonnet-4-5",
+                    now - 2 * 3_600_000 + 90_000,
+                    900,
+                    50,
+                ),
             ],
         )
         .unwrap();
@@ -1920,6 +2058,7 @@ mod retention_tests {
                 call("b2", "gpt-6-sol", now - 3 * 86_400_000 + 200_000, 90),
                 call("b3", "gpt-6-sol", now - 1_000_000, 100),
                 call("b4", "gpt-6-sol", now - 990_000, 110),
+                timed("b4a", "gpt-6-sol", now - 900_000, 115, 3_000),
                 call("b5", "gpt-6-sol", now + 300_000, 120),
             ],
         )
@@ -1938,6 +2077,12 @@ mod retention_tests {
         let regions = pricing::PriceRegions::default();
         let mut view = View::load(&db, &paths, now, &regions).unwrap();
         assert_eq!(kept(&view), queried(&db, &paths, now));
+        assert_eq!(
+            view.replies
+                .get(&("claude".into(), "claude-sonnet-4-5".into(), true, true)),
+            Some(&(87, 4_000, 1)),
+            "of the timed calls only a8 counts"
+        );
         assert!(
             view.valid_until.is_some_and(|until| until <= now + 300_000),
             "the call ahead of the clock bounds the view"
@@ -1985,5 +2130,89 @@ mod retention_tests {
         view.update(&db, &all, &HashSet::new(), then, &regions)
             .unwrap();
         assert_eq!(kept(&view), queried(&db, &all, then));
+    }
+
+    #[test]
+    fn a_call_timed_by_a_later_line_changes_its_duration_alone() {
+        let db = Connection::open_in_memory().unwrap();
+        crate::database::schema(&db).unwrap();
+        let now = Utc::now().timestamp_millis();
+        let call = |key: &str, at: i64, took: Option<u64>| Event {
+            key: key.into(),
+            model: "claude-opus-4-5".into(),
+            at,
+            usage: Usage {
+                input: 10,
+                output: 200,
+                ..Default::default()
+            },
+            duration_ms: took,
+            ..Default::default()
+        };
+        assert!(write(
+            &db,
+            "/l",
+            "claude",
+            &[
+                call("a", now - 60_000, None),
+                call("b", now - 30_000, Some(2_000))
+            ]
+        )
+        .unwrap());
+        let stored = |db: &Connection| {
+            db.query_row(
+                "SELECT duration_ms,gap_ms,(SELECT group_concat(updated_at_ms||':'||output) FROM usage_meter_bucket) FROM usage_meter_event WHERE event_key='b'",
+                [],
+                |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, String>(2)?)),
+            )
+            .unwrap()
+        };
+        let before = stored(&db);
+        assert_eq!((before.0, before.1), (Some(2_000), Some(30_000)));
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        assert!(
+            write(&db, "/l", "claude", &[call("b", now - 30_000, Some(5_000))]).unwrap(),
+            "a new duration is a change the meter view reads"
+        );
+        let after = stored(&db);
+        assert_eq!((after.0, after.1), (Some(5_000), Some(30_000)));
+        assert_eq!(after.2, before.2, "no bucket moves");
+        assert!(!write(&db, "/l", "claude", &[call("b", now - 30_000, Some(5_000))]).unwrap());
+    }
+
+    #[test]
+    fn the_reply_rate_reads_timed_calls_first_and_gaps_as_a_floor() {
+        assert_eq!(
+            reply_span(200, Some(5_000), Some(90_000)),
+            Some((5_000, true))
+        );
+        assert_eq!(reply_span(200, None, Some(90_000)), Some((90_000, false)));
+        assert_eq!(
+            reply_span(200, Some(700_000), Some(1_000)),
+            None,
+            "a stall, gap or not"
+        );
+        assert_eq!(reply_span(200, None, Some(150_000)), None, "an idle gap");
+        assert_eq!(reply_span(9, Some(5_000), None), None, "too little output");
+        assert_eq!(reply_span(2_000, Some(150), None), None, "a burst");
+        assert_eq!(reply_span(200, Some(50), None), None);
+        let timed = reply_rate([(400, 20_000, 2), (300, 3_000, 1)]).unwrap();
+        assert_eq!(
+            (
+                timed["tokensPerSecond"].as_f64(),
+                timed["lowerBound"].as_bool()
+            ),
+            (Some(100.0), Some(false)),
+            "gap-timed calls do not dilute timed ones"
+        );
+        let floor = reply_rate([(400, 20_000, 2), (0, 0, 0)]).unwrap();
+        assert_eq!(
+            (
+                floor["tokensPerSecond"].as_f64(),
+                floor["lowerBound"].as_bool()
+            ),
+            (Some(20.0), Some(true))
+        );
+        assert!(reply_rate([(0, 0, 0); 2]).is_none());
     }
 }

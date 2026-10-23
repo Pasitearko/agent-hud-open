@@ -26,6 +26,10 @@ pub struct Event {
     /// The tools the call asked for, in order; empty when it asked for none
     /// or its log names none (agent-hud-native-open `TurnCall.tools`).
     pub tools: Vec<String>,
+    /// How long the call itself took, from its request to its last output,
+    /// as the client's log records it; None where the log does not time the
+    /// call. Tool runs and the person's time between calls are not in it.
+    pub duration_ms: Option<u64>,
 }
 
 /// Where a session's turn starts, or where its client compacted the

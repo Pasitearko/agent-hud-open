@@ -132,6 +132,11 @@ impl Log {
         if kind == "llm/retry-started" {
             self.source_state["lastAttempt"] = Value::Null;
         }
+        // A step's call is timed from its start, or its latest retry, to the
+        // line that settles its message; tool runs follow that line.
+        if matches!(kind, "step/start" | "llm/retry-started") {
+            self.call_timing.request_at[0] = Some(at);
+        }
         if !matches!(
             kind,
             "assistant/chunk" | "assistant/message" | "assistant/attempt"
@@ -183,7 +188,8 @@ impl Log {
             self.model,
             self.source_state["provider"].as_str().unwrap_or("Unknown")
         );
-        self.count_source(
+        let duration_ms = self.call_timing.since_request(0, at);
+        self.count_timed_source(
             key,
             &model,
             at,
@@ -195,6 +201,7 @@ impl Log {
                 reasoning,
             },
             false,
+            duration_ms,
         );
     }
 }

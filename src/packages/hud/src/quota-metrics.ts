@@ -203,18 +203,28 @@ export function quotaMetric(
     metrics.replyRate.calls > 0
   ) {
     const rate = metrics.replyRate;
-    result.value = `${rate.tokensPerSecond < 10 ? rate.tokensPerSecond.toFixed(1) : Math.trunc(rate.tokensPerSecond)}/s`;
+    // A rate timed by the gaps between calls holds tool runs and the
+    // person's time, so it is a floor.
+    result.value = `${rate.lowerBound ? "≥" : ""}${rate.tokensPerSecond < 10 ? rate.tokensPerSecond.toFixed(1) : Math.trunc(rate.tokensPerSecond)}/s`;
     result.detail = say(
       language,
       `${rate.calls} 次回复`,
       `${rate.calls} replies`,
     );
     result.available = result.selectable = true;
-    result.hint = say(
-      language,
-      `这个窗口的模型在 ${rate.calls} 次计时回复中输出 ${numberFormat("zh-CN").format(rate.tokensOut)} 个 token；有最近一小时的记录时取最近一小时，否则取最近七天。间隔超过 120 秒的不计。`,
-      `${numberFormat("en-US").format(rate.tokensOut)} output tokens over ${rate.calls} timed replies from this window's models; latest hour when available, otherwise the last seven days. Gaps over 120 seconds are excluded.`,
-    );
+    const zhTokens = numberFormat("zh-CN").format(rate.tokensOut);
+    const enTokens = numberFormat("en-US").format(rate.tokensOut);
+    result.hint = rate.lowerBound
+      ? say(
+          language,
+          `这个窗口的模型在 ${rate.calls} 次回复中输出 ${zhTokens} 个 token。客户端日志没有记下每次调用的用时，只能从上一次调用算起（120 秒以内），其中含工具运行和你的时间，实际速度不低于这个数。有最近一小时的记录时取最近一小时，否则取最近七天。`,
+          `${enTokens} output tokens over ${rate.calls} replies from this window's models. The client's log does not time its calls, so each is timed from the call before it (within 120 seconds), tool runs and your time included; the real rate is at least this. Latest hour when available, otherwise the last seven days.`,
+        )
+      : say(
+          language,
+          `这个窗口的模型在 ${rate.calls} 次回复中输出 ${zhTokens} 个 token，每次按客户端日志记下的调用用时计算，不含工具运行和你的时间。有最近一小时的记录时取最近一小时，否则取最近七天。`,
+          `${enTokens} output tokens over ${rate.calls} replies from this window's models, each timed by its own call as the client's log records it, without tool runs or your time. Latest hour when available, otherwise the last seven days.`,
+        );
   } else if (
     measure === "consumed" &&
     metrics?.consumed &&

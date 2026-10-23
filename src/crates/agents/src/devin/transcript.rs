@@ -86,6 +86,9 @@ pub fn read(db: &Connection, cursor: &Value) -> rusqlite::Result<Page> {
             parent: None,
             archived: false,
             updated: None,
+            // The call's own time: its wait for the first token and its
+            // output (`ttft_ms` + per-token time).
+            duration_ms: metrics["total_time_ms"].as_u64().filter(|ms| *ms > 0),
         });
     }
     Ok(Page {

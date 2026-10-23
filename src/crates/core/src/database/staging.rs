@@ -64,9 +64,11 @@ pub(crate) fn insert_log_record(
     model: Option<&str>,
     context: Option<&str>,
     candidate: Option<&str>,
+    duration_ms: Option<i64>,
 ) -> rusqlite::Result<()> {
     db.execute(
-        "INSERT OR REPLACE INTO source_log_record VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+        "INSERT OR REPLACE INTO source_log_record(path,generation,offset,id,event_key,at_ms,input,output,cache_read,model,context,candidate,duration_ms)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
         params![
             path,
             generation,
@@ -79,7 +81,8 @@ pub(crate) fn insert_log_record(
             cache_read,
             model,
             context,
-            candidate
+            candidate,
+            duration_ms
         ],
     )?;
     Ok(())
@@ -140,6 +143,7 @@ pub(crate) struct StagedLogRecord {
     pub model: Option<String>,
     pub context: Option<String>,
     pub candidate: Option<String>,
+    pub duration_ms: Option<i64>,
 }
 
 pub(crate) fn query_log_records_page(
@@ -149,7 +153,7 @@ pub(crate) fn query_log_records_page(
     after_offset: i64,
 ) -> rusqlite::Result<Vec<StagedLogRecord>> {
     let mut stmt = db.prepare(
-        "SELECT offset,id,event_key,at_ms,input,output,cache_read,model,context,candidate
+        "SELECT offset,id,event_key,at_ms,input,output,cache_read,model,context,candidate,duration_ms
          FROM source_log_record WHERE path=?1 AND generation=?2 AND offset>?3 ORDER BY offset LIMIT 500",
     )?;
     let rows = stmt.query_map(params![path, generation, after_offset], |r| {
@@ -164,6 +168,7 @@ pub(crate) fn query_log_records_page(
             model: r.get(7)?,
             context: r.get(8)?,
             candidate: r.get(9)?,
+            duration_ms: r.get(10)?,
         })
     })?;
     rows.collect()

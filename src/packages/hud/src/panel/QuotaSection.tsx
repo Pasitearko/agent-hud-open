@@ -786,7 +786,7 @@ export function SourceBalances({
                     {
                       name: language === "zh" ? "输出速度" : "Output speed",
                       value: metrics?.replyRate
-                        ? `${metrics.replyRate.tokensPerSecond.toFixed(1)} tok/s`
+                        ? `${metrics.replyRate.lowerBound ? "≥" : ""}${metrics.replyRate.tokensPerSecond.toFixed(1)} tok/s`
                         : "—",
                     },
                   ]

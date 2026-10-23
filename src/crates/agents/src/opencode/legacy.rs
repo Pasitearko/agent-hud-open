@@ -27,6 +27,8 @@ struct Message {
     model: Value,
     #[serde(default)]
     path: Value,
+    #[serde(default)]
+    finish: Value,
 }
 
 pub fn accepts(path: &Path) -> bool {
@@ -87,6 +89,7 @@ pub fn read(path: &Path) -> rusqlite::Result<Page> {
         parent: None,
         archived: false,
         updated: v.time["completed"].as_i64(),
+        duration_ms: super::transcript::reply_time(&v.finish, &v.time),
     };
     Ok(Page {
         records: vec![record],

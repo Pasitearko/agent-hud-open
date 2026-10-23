@@ -132,6 +132,7 @@ pub fn read(db: &Connection, path: &Path, cursor: &Value) -> rusqlite::Result<Pa
                     parent: None,
                     archived: false,
                     updated: None,
+                    duration_ms: None,
                 });
             }
         }
@@ -166,6 +167,7 @@ pub fn read(db: &Connection, path: &Path, cursor: &Value) -> rusqlite::Result<Pa
                 parent: None,
                 archived: false,
                 updated: None,
+                duration_ms: None,
             });
         }
         if let Some(record) = records.last_mut() {

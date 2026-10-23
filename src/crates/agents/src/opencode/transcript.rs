@@ -7,6 +7,18 @@ use crate::{
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
+/// How long a reply took: from its creation to its completion, when it
+/// finished without calling tools. A reply that called tools completes after
+/// they ran, so that span is not the model's.
+pub fn reply_time(finish: &Value, time: &Value) -> Option<u64> {
+    let finish = finish.as_str()?;
+    if finish == "tool-calls" {
+        return None;
+    }
+    let took = time["completed"].as_f64()? - time["created"].as_f64()?;
+    (took.is_finite() && took >= 1.0).then_some(took as u64)
+}
+
 pub fn read(db: &Connection, cursor: &Value) -> rusqlite::Result<Page> {
     let tables = sql_tables(db)?;
     let stage = cursor["stage"].as_u64().unwrap_or(0);
@@ -53,6 +65,7 @@ pub fn read(db: &Connection, cursor: &Value) -> rusqlite::Result<Page> {
         "providerID",
         "model",
         "path",
+        "finish",
     ]
     .map(|field| format!("'{field}',json_extract(m.data,'$.{field}')"))
     .join(",");
@@ -129,6 +142,7 @@ pub fn read(db: &Connection, cursor: &Value) -> rusqlite::Result<Page> {
             parent: sql_text(row, 7).map(|id| format!("opencode:{id}")),
             archived: !matches!(row.get_ref(6)?, rusqlite::types::ValueRef::Null),
             updated: v["time"]["completed"].as_i64(),
+            duration_ms: reply_time(&v["finish"], &v["time"]),
         });
     }
     let cursor = if seen == 1000 {

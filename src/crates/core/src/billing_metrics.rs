@@ -11,6 +11,7 @@ struct Event {
     at: i64,
     usage: Usage,
     gap: Option<i64>,
+    duration: Option<i64>,
     prices: [Option<i128>; 2],
 }
 impl Cache {
@@ -44,6 +45,7 @@ impl Cache {
                 at: row.at,
                 usage,
                 gap: row.gap,
+                duration: row.duration,
                 prices,
             });
         }
@@ -68,18 +70,22 @@ impl Cache {
         let reply = {
             let mut result = Value::Null;
             for cutoff in [now - 3_600_000, now - 7 * 86_400_000] {
-                let (mut output, mut ms, mut calls) = (0u64, 0i64, 0u64);
+                let mut sums = [(0u64, 0u64, 0u64); 2];
                 for e in &self.events {
-                    if let Some(gap) = e.gap.filter(|g| *g > 0 && *g <= 120_000) {
-                        if e.at <= now && e.at - gap >= cutoff {
-                            output += e.usage.output + e.usage.reasoning;
-                            ms += gap;
-                            calls += 1
-                        }
+                    let tokens = e.usage.output + e.usage.reasoning;
+                    let Some((span, timed)) = metering::reply_span(tokens, e.duration, e.gap)
+                    else {
+                        continue;
+                    };
+                    if e.at <= now && e.at - span as i64 >= cutoff {
+                        let sum = &mut sums[usize::from(timed)];
+                        sum.0 += tokens;
+                        sum.1 += span;
+                        sum.2 += 1;
                     }
                 }
-                if ms > 0 {
-                    result = json!({"tokensPerSecond":output as f64/(ms as f64/1000.),"calls":calls,"tokensOut":output});
+                if let Some(rate) = metering::reply_rate(sums) {
+                    result = rate;
                     break;
                 }
             }

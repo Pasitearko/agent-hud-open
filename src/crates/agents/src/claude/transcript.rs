@@ -75,6 +75,17 @@ impl Log {
                 self.mark(at, metering::MarkKind::Prompt);
             }
         }
+        // A response is timed from the newest user line of its chain (a
+        // prompt or a tool result) to its own last line. Attachment lines
+        // are no request time: Claude Code often writes them as the
+        // response arrives.
+        let chain = usize::from(value["isSidechain"] == true);
+        let line_at = value["timestamp"].as_str().and_then(metering::date_ms);
+        if value["type"] == "user" {
+            if let Some(at) = line_at {
+                self.call_timing.request_at[chain] = Some(at);
+            }
+        }
         // Claude Code's own order: the name given to the session, then the
         // title it generated, then the first prompt.
         match value["type"].as_str() {
@@ -122,9 +133,7 @@ impl Log {
         let id = id.as_str();
         let usage = &message["usage"];
         if !usage.is_object() {
-            if !tools.is_empty() {
-                self.add_call_tools(id, tools);
-            }
+            self.extend_call(id, tools, line_at);
             return;
         }
         // The counters as the line writes them: output includes the thinking
@@ -142,9 +151,7 @@ impl Log {
         let previous = self.messages.get(id).copied().unwrap_or_default();
         let next = previous.max(next);
         if previous == next {
-            if !tools.is_empty() {
-                self.add_call_tools(id, tools);
-            }
+            self.extend_call(id, tools, line_at);
         } else {
             let (counted, before) = (claude_counted(next), claude_counted(previous));
             // The session's model is the one that wrote the most output
@@ -159,7 +166,8 @@ impl Log {
                 .filter(|(_, output)| **output > 0)
                 .map(|(model, _)| model.clone())
                 .unwrap_or_else(|| "Unknown".into());
-            if let Some(at) = value["timestamp"].as_str().and_then(metering::date_ms) {
+            if let Some(at) = line_at {
+                let started = self.call_timing.request_at[chain];
                 let recent = match self.recent_calls.iter().position(|call| call.id == id) {
                     Some(index) => &mut self.recent_calls[index],
                     None => {
@@ -171,14 +179,18 @@ impl Log {
                             at,
                             model: model.clone(),
                             tools: Vec::new(),
+                            started,
+                            ended: None,
                         });
                         self.recent_calls.back_mut().unwrap()
                     }
                 };
                 recent.at = at;
+                recent.ended = Some(recent.ended.map_or(at, |ended| ended.max(at)));
                 recent.model = model.clone();
                 recent.tools.extend(tools);
                 let tools = recent.tools.clone();
+                let duration_ms = recent.took();
                 let key = metering::event_key(&claude_event_key(id));
                 self.meter_events.insert(
                     key.clone(),
@@ -188,6 +200,7 @@ impl Log {
                         at,
                         usage: counted,
                         tools,
+                        duration_ms,
                         ..Default::default()
                     },
                 );
@@ -259,12 +272,21 @@ fn interruption(value: &Value) -> bool {
 }
 
 impl Log {
-    /// Adds the tools a later line of a recent response asked for to its call.
-    fn add_call_tools(&mut self, id: &str, tools: Vec<String>) {
+    /// A later line of a recent response that leaves its counts alone: the
+    /// tools it asks for join the call, and its time moves the call's end.
+    fn extend_call(&mut self, id: &str, tools: Vec<String>, at: Option<i64>) {
         let Some(recent) = self.recent_calls.iter_mut().find(|call| call.id == id) else {
             return;
         };
+        let ended = match (recent.ended, at) {
+            (Some(ended), Some(at)) => Some(ended.max(at)),
+            (ended, at) => ended.or(at),
+        };
+        if tools.is_empty() && ended == recent.ended {
+            return;
+        }
         recent.tools.extend(tools);
+        recent.ended = ended;
         let Some(usage) = self.messages.get(id).copied().map(claude_counted) else {
             return;
         };
@@ -277,6 +299,7 @@ impl Log {
                 at: recent.at,
                 usage,
                 tools: recent.tools.clone(),
+                duration_ms: recent.took(),
                 ..Default::default()
             },
         );

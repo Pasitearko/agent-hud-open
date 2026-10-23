@@ -10,6 +10,9 @@ pub mod metering;
 pub mod records;
 pub mod usage;
 
+#[cfg(test)]
+mod call_timing_tests;
+
 pub use live::LiveLog;
 pub use log::{Log, RecentCall};
 pub use usage::{number, TimelineBucket, Usage};
@@ -159,6 +162,19 @@ impl Log {
 
     /// Corrections replace the same source response, not a second usage event.
     pub fn count_source(&mut self, key: String, model: &str, at: i64, next: Usage, maximum: bool) {
+        self.count_timed_source(key, model, at, next, maximum, None);
+    }
+
+    /// `count_source` for a call whose log records how long it took.
+    pub fn count_timed_source(
+        &mut self,
+        key: String,
+        model: &str,
+        at: i64,
+        next: Usage,
+        maximum: bool,
+        duration_ms: Option<u64>,
+    ) {
         if next.total() == 0 && !self.messages.contains_key(&key) {
             return;
         }
@@ -182,6 +198,7 @@ impl Log {
                 model: model.into(),
                 at,
                 usage: next,
+                duration_ms,
                 ..Default::default()
             },
         );

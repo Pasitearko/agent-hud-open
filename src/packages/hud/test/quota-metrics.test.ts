@@ -101,6 +101,21 @@ test("burn rate: sampling is the detail, a run-out before the reset is its time,
     },
   });
   assert.equal(quotaMetric(replies, "tokens", now, zh).detail, "9 次回复");
+  assert.equal(quotaMetric(replies, "tokens", now, en).value, "42/s");
+  assert.match(quotaMetric(replies, "tokens", now, en).hint, /own call/);
+  // Replies timed only by the gaps between calls give a floor.
+  const gaps = row({
+    metrics: {
+      replyRate: {
+        tokensPerSecond: 8.25,
+        calls: 4,
+        tokensOut: 330,
+        lowerBound: true,
+      },
+    },
+  });
+  assert.equal(quotaMetric(gaps, "tokens", now, en).value, "≥8.3/s");
+  assert.match(quotaMetric(gaps, "tokens", now, en).hint, /at least this/);
 });
 
 test("remaining quota changes the figure without changing readings, risk or other measures", () => {

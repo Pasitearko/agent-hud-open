@@ -154,6 +154,10 @@ pub(crate) fn schema(db: &Connection) -> rusqlite::Result<()> {
     // asked for (a JSON array), as the log's lines said.
     ensure_column(db, "usage_meter_event", "context_window", "INTEGER")?;
     ensure_column(db, "usage_meter_event", "tools", "TEXT")?;
+    // How long the call itself took, where its log records it (NULL where
+    // not); calls read before the column existed keep NULL.
+    ensure_column(db, "usage_meter_event", "duration_ms", "INTEGER")?;
+    ensure_column(db, "source_log_record", "duration_ms", "INTEGER")?;
     // Prompt (0) and compaction (1) marks drive a session's turns.
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS usage_meter_mark(

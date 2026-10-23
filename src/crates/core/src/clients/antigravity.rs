@@ -264,6 +264,7 @@ pub(crate) fn read(
             parent: None,
             archived: false,
             updated: None,
+            duration_ms: None,
         });
     }
     let cursor = if seen == PAGE {
