@@ -172,6 +172,15 @@ fn response(socket: &mut UnixStream, request: &Value, result: Value) {
         json!({"type":"response","requestId":request["requestId"],"resultType":"success","handledByClientId":"owner","result":result}),
     );
 }
+/// A temporary folder short enough for a Unix socket path: macOS's own
+/// temporary folder is too long, and /private/tmp exists only on macOS.
+fn short_temp() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/private/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
 fn wait(mut condition: impl FnMut() -> bool) {
     let end = Instant::now() + Duration::from_secs(4);
     while !condition() {
@@ -182,8 +191,7 @@ fn wait(mut condition: impl FnMut() -> bool) {
 #[test]
 fn observer_owned_reply_settle_and_disconnect_fixture() {
     for uncertain in [false, true] {
-        let directory =
-            PathBuf::from("/private/tmp").join(format!("cd-{}-{uncertain}", std::process::id()));
+        let directory = short_temp().join(format!("cd-{}-{uncertain}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
         fs::create_dir_all(directory.join("ipc")).unwrap();
         let listener = UnixListener::bind(directory.join("ipc/ipc.sock")).unwrap();
@@ -277,8 +285,7 @@ fn observer_owned_reply_settle_and_disconnect_fixture() {
 
 #[test]
 fn native_waiting_is_phase_only_and_clears_on_disconnect_and_stop() {
-    let directory =
-        PathBuf::from("/private/tmp").join(format!("cd-waiting-{}", std::process::id()));
+    let directory = short_temp().join(format!("cd-waiting-{}", std::process::id()));
     let requests = Requests::default();
     let mut observer =
         CodexDesktopObserver::start(directory, requests.clone(), Arc::new(|| {})).unwrap();
