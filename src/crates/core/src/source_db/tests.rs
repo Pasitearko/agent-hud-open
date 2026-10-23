@@ -303,3 +303,47 @@ fn grok_inference_records_keep_the_model_calls_own_time() {
     refresh(&mut backend);
     assert_eq!(timed_calls(&backend), [(200, Some(4_734)), (300, None)]);
 }
+
+#[test]
+fn copilot_chat_spans_keep_their_own_time() {
+    let root = tempfile::tempdir().unwrap();
+    let otel = root.path().join("otel");
+    std::fs::create_dir_all(&otel).unwrap();
+    let start = chrono::Utc::now().timestamp() - 60;
+    let span = |id: &str, end: Option<[i64; 2]>, output: u64| {
+        let mut span = json!({
+            "type":"span","name":"chat gpt-5","traceId":"t1","spanId":id,
+            "startTime":[start,0],
+            "attributes":{
+                "gen_ai.conversation.id":"c1","gen_ai.operation.name":"chat",
+                "gen_ai.response.model":"gpt-5",
+                "gen_ai.usage.input_tokens":100,"gen_ai.usage.output_tokens":output
+            }
+        });
+        if let Some(end) = end {
+            span["endTime"] = json!(end);
+        }
+        span
+    };
+    let lines = [
+        span("a", Some([start + 3, 250_000_000]), 200),
+        span("b", None, 300),
+    ];
+    std::fs::write(
+        otel.join("spans.jsonl"),
+        lines
+            .iter()
+            .map(|line| format!("{line}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let mut backend = AgentHudCore::new(
+        vec![SourceRoot {
+            path: otel,
+            provider: "copilot",
+        }],
+        root.path().join("hud"),
+    );
+    refresh(&mut backend);
+    assert_eq!(timed_calls(&backend), [(200, Some(3_250)), (300, None)]);
+}

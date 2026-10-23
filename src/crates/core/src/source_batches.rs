@@ -245,9 +245,16 @@ fn copilot(db: &Connection, path: &str, g: &str, offset: u64, v: &Value) -> rusq
     if input.is_none() && output.is_none() {
         return Ok(());
     }
-    let Some(at) = otel_time(&v["startTime"]).or_else(|| otel_time(&v["endTime"])) else {
+    let (start, end) = (otel_time(&v["startTime"]), otel_time(&v["endTime"]));
+    let Some(at) = start.or(end) else {
         return Ok(());
     };
+    // A chat span is one model call: the turn's tool runs and hooks are its
+    // sibling spans, so its own start to end is the call's time.
+    let took = start
+        .zip(end)
+        .map(|(start, end)| end - start)
+        .filter(|ms| *ms > 0);
     let read = number(&a["gen_ai.usage.cache_read.input_tokens"])
         .or_else(|| number(&a["gen_ai.usage.cache_read_input_tokens"]))
         .unwrap_or(0);
@@ -273,7 +280,7 @@ fn copilot(db: &Connection, path: &str, g: &str, offset: u64, v: &Value) -> rusq
         model,
         trace,
         None,
-        None,
+        took,
     )?;
     Ok(())
 }
