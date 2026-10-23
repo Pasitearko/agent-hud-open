@@ -20,7 +20,7 @@ import {
 } from "@agent-hud/ui/format";
 import { quotaAccountKey, quotaShortName, vendorKey } from "../model";
 import { FittingName } from "./FittingName";
-import { AccountHeader, BlockNotice, Notice } from "./AccountHeader";
+import { AccountHeader, BlockNotice } from "./AccountHeader";
 import { missingReadingNotice } from "./account-labels";
 import { ResetCreditsRow } from "./ResetCreditsRow";
 import { usePanelServices } from "../PanelContext";
@@ -874,8 +874,14 @@ export function SourceBalances({
                 )}
               </div>
               {account.notice && (
-                <div style={{ fontSize: 11, paddingLeft: 26 }}>
-                  <Notice text={account.notice} color={colors.warning} whole />
+                <div
+                  style={{
+                    fontSize: 11,
+                    paddingLeft: 26,
+                    color: colors.warning,
+                  }}
+                >
+                  {account.notice}
                 </div>
               )}
               <div

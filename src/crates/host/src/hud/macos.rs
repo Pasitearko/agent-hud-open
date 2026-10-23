@@ -7,12 +7,12 @@ use super::{
 use objc2::runtime::NSObjectProtocol;
 use objc2::{rc::Retained, MainThreadMarker};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationOptions, NSCursor, NSPasteboard, NSPasteboardTypeString,
-    NSRunningApplication, NSScreen, NSStatusWindowLevel, NSWindow, NSWindowAnimationBehavior,
-    NSWindowCollectionBehavior, NSWorkspace,
+    NSApplication, NSApplicationActivationOptions, NSCursor, NSRunningApplication, NSScreen,
+    NSStatusWindowLevel, NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior,
+    NSWorkspace,
 };
 use objc2_core_foundation::{CFRetained, CFUUID};
-use objc2_foundation::{ns_string, NSNumber, NSPoint, NSString};
+use objc2_foundation::{ns_string, NSNumber, NSPoint};
 use std::ptr::NonNull;
 use std::{
     sync::{
@@ -213,20 +213,6 @@ pub(super) fn global_pointer(app: &tauri::AppHandle) -> Result<Point, String> {
         x: point.x,
         y: primary_height - point.y,
     })
-}
-
-/// Puts `text` on the general pasteboard as plain text. The HUD panel never
-/// becomes the key window, so its words cannot be copied with the keyboard.
-pub(super) fn copy_text(text: &str) -> Result<(), String> {
-    let pasteboard = NSPasteboard::generalPasteboard();
-    pasteboard.clearContents();
-    // An AppKit constant that lives as long as the process.
-    let kind = unsafe { NSPasteboardTypeString };
-    if pasteboard.setString_forType(&NSString::from_str(text), kind) {
-        Ok(())
-    } else {
-        Err("The pasteboard did not take the text".into())
-    }
 }
 
 fn on_main<T: Send + 'static>(

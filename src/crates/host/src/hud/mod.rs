@@ -23,7 +23,6 @@ mod types;
 //   measure_screens, screen              display identity, notch and menu bar
 //   TextFocusOrigin, begin_text_focus,   the explicit keyboard-focus lease
 //     end_text_focus
-//   copy_text                            put a notice's words on the clipboard
 //   set_drag_cursor, global_pointer,     pointer and button state while hovering
 //     left_mouse_down, pointer_keys        or dragging
 //   wayland_session, capabilities        what this host cannot do
@@ -46,7 +45,7 @@ pub(super) use displays::*;
 pub use drag::hud_drag_start;
 pub(super) use drag::*;
 pub(super) use input::*;
-pub use input::{hud_copy_text, hud_report_regions, hud_text_focus};
+pub use input::{hud_report_regions, hud_text_focus};
 pub(crate) use plans::{Planner, Screen};
 pub use types::*;
 

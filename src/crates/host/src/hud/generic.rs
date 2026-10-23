@@ -81,12 +81,6 @@ pub(super) fn screen(
     })
 }
 
-/// No native pasteboard adapter: the HUD writes through the web clipboard,
-/// which works here because the window can take focus.
-pub(super) fn copy_text(_text: &str) -> Result<(), String> {
-    Err("This host copies through the web clipboard".into())
-}
-
 /// No previous application is remembered; the window takes focus directly.
 pub(super) struct TextFocusOrigin;
 

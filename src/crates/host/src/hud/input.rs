@@ -64,21 +64,6 @@ pub async fn hud_report_regions(
     .map_err(|error| format!("HUD input worker failed: {error}"))?
 }
 
-/// Copies words the HUD shows, such as a block's notice. The caller must be a
-/// registered HUD window; only short plain text is taken.
-#[tauri::command]
-pub async fn hud_copy_text(
-    window: tauri::WebviewWindow,
-    text: String,
-    windows: tauri::State<'_, HudWindows>,
-) -> Result<(), String> {
-    owner_for_window(&windows.0, &window)?;
-    if text.trim().is_empty() || text.len() > 16 * 1024 {
-        return Err("The HUD copies only short text".into());
-    }
-    host::copy_text(&text)
-}
-
 /// Keyboard focus is an explicit text-editing lease, never a hover side effect.
 /// The injected caller window must be a registered, visible per-screen HUD.
 #[tauri::command]
