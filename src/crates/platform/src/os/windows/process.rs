@@ -19,6 +19,8 @@ struct Parent {
 const MAX_OUTPUT_BYTES: u64 = 1024 * 1024;
 
 pub(crate) fn parent_processes() -> Vec<ProcessAncestor> {
+    #[cfg(test)]
+    let started = Instant::now();
     let Some(system) = std::env::var_os("SystemRoot") else {
         return Vec::new();
     };
@@ -34,31 +36,107 @@ pub(crate) fn parent_processes() -> Vec<ProcessAncestor> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    #[cfg(test)]
+    command
+        .env("AGENT_HUD_ANCESTRY_DIAGNOSTICS", "1")
+        .stderr(Stdio::piped());
     let Ok(mut child) = command.spawn() else {
+        #[cfg(test)]
+        eprintln!(
+            "ancestry: spawn failed after {}ms",
+            started.elapsed().as_millis()
+        );
         return Vec::new();
+    };
+    #[cfg(test)]
+    let diagnostics = {
+        let stderr = child.stderr.take().unwrap();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = stderr.take(16 * 1024).read_to_end(&mut bytes);
+            let _ = sender.send(bytes);
+        });
+        eprintln!(
+            "ancestry: spawned after {}ms",
+            started.elapsed().as_millis()
+        );
+        receiver
     };
     let stdout = child.stdout.take().unwrap();
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
-        let _ = stdout.take(MAX_OUTPUT_BYTES).read_to_end(&mut bytes);
+        let _read = stdout.take(MAX_OUTPUT_BYTES).read_to_end(&mut bytes);
+        #[cfg(test)]
+        eprintln!(
+            "ancestry: stdout read {:?}",
+            _read.map_err(|error| error.kind())
+        );
         let _ = sender.send(bytes);
     });
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(_status)) => {
+                #[cfg(test)]
+                eprintln!(
+                    "ancestry: child exit {_status} after {}ms",
+                    started.elapsed().as_millis()
+                );
+                break;
+            }
             Ok(None) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(10));
             }
-            _ => {
+            _state => {
+                #[cfg(test)]
+                eprintln!(
+                    "ancestry: stop state={_state:?} after {}ms",
+                    started.elapsed().as_millis()
+                );
                 let _ = child.kill();
                 let _ = child.wait();
                 break;
             }
         }
     }
-    let Ok(bytes) = receiver.recv_timeout(Duration::from_millis(100)) else {
+    let output = receiver.recv_timeout(Duration::from_millis(100));
+    #[cfg(test)]
+    {
+        match &output {
+            Ok(bytes) => eprintln!(
+                "ancestry: stdout bytes={} complete-records={} after {}ms",
+                bytes.len(),
+                parents(bytes).count(),
+                started.elapsed().as_millis()
+            ),
+            Err(error) => eprintln!("ancestry: stdout receive {error:?}"),
+        }
+        match diagnostics.recv_timeout(Duration::from_millis(100)) {
+            Ok(bytes) => {
+                for line in String::from_utf8_lossy(&bytes).lines() {
+                    // Never relay a PowerShell exception, command line or path.
+                    // Only the script's fixed stage names and numeric timing
+                    // records belong in the native test's failure output.
+                    if let Some(report) =
+                        line.strip_prefix("agent-hud-ancestry: ").filter(|report| {
+                            report.len() <= 160
+                                && report.bytes().all(|byte| {
+                                    byte.is_ascii_lowercase()
+                                        || byte.is_ascii_digit()
+                                        || matches!(byte, b' ' | b'-' | b'=')
+                                })
+                        })
+                    {
+                        eprintln!("ancestry: {report}");
+                    }
+                }
+            }
+            Err(error) => eprintln!("ancestry: diagnostic receive {error:?}"),
+        }
+    }
+    let Ok(bytes) = output else {
         return Vec::new();
     };
     parents(&bytes)
