@@ -118,8 +118,18 @@ pub fn read(host: &dyn Host) -> Result<Reading, String> {
                 "The Claude account changed during the quota query; retrying shortly",
             ));
         }
+        // Plan limits apply but the engine came back without numbers: its own
+        // usage lookup failed (refused for asking too often, or an error) and
+        // it had nothing seen earlier to answer with. That is a failed read,
+        // so the last reading stays, not a login without plan limits.
+        if payload["rate_limits_available"] == true && !payload["rate_limits"].is_object() {
+            return Err(l10n::text(
+                "这次没有读到 Claude 额度，稍后自动重试",
+                "Couldn't read the Claude quota this time; retrying shortly",
+            ));
+        }
         let mut reading = Reading::empty("claude");
-        if payload["rate_limits_available"] != true || !payload["rate_limits"].is_object() {
+        if payload["rate_limits_available"] != true {
             // get_usage reports no plan limits both for an API-key login and
             // for no login at all; only `auth status` tells the two apart.
             let signed_in = host
@@ -382,6 +392,21 @@ mod tests {
             Some("No plan limits for this login (API key or third-party platform)")
         );
         assert_eq!(host.started.borrow()[1].1, ["auth", "status", "--json"]);
+    }
+
+    #[test]
+    fn plan_limits_without_numbers_are_a_failed_read_not_a_login_without_limits() {
+        // Claude Code 2.1.307 answers this way when its usage lookup fails and
+        // it has no numbers seen earlier; `auth status` is not asked.
+        let empty = json!({"subtype": "success", "response": {
+            "rate_limits_available": true, "subscription_type": "max", "rate_limits": null,
+        }});
+        let host = installed(empty);
+        assert_eq!(
+            read(&host).err().unwrap(),
+            "Couldn't read the Claude quota this time; retrying shortly"
+        );
+        assert_eq!(host.started.borrow().len(), 1);
     }
 
     #[test]
