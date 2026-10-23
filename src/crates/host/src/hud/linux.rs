@@ -2,8 +2,8 @@
 //! the window manager; a Wayland layer-shell and global-input backend is not
 //! implemented, so Wayland refuses an edge HUD.
 pub(super) use super::generic::{
-    begin_text_focus, end_text_focus, global_pointer, measure_screens, panel_builder, place,
-    screen, set_drag_cursor, shown, TextFocusOrigin,
+    begin_text_focus, copy_text, end_text_focus, global_pointer, measure_screens, panel_builder,
+    place, screen, set_drag_cursor, shown, TextFocusOrigin,
 };
 use super::{base_limitations, HudCapabilities, PointerKeys};
 

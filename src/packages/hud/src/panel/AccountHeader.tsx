@@ -1,10 +1,18 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { Check, Copy } from "lucide-react";
 import type { Account } from "@agent-hud/protocol";
-import { accountReadLabel } from "./account-labels";
+import { accountReadLabel, say } from "./account-labels";
 import { useFormat } from "@agent-hud/ui/format-context";
 import { MiddleTruncated } from "./MiddleTruncated";
-import { palette } from "./theme";
+import { noButtonChrome, palette } from "./theme";
 import { useGround } from "../ground";
+import { usePanelServices } from "../PanelContext";
 
 /** The account above its windows (Open's AccountSectionHeader): its name,
  * shortened from the middle, its plan, and at the end of the line whether it
@@ -129,18 +137,90 @@ function WholeOrNothing({
   );
 }
 
-function Notice({ text, color }: { text: string; color: string }) {
-  return (
+/** A notice, cut to two lines unless `whole`. A click copies it whole: the
+ * HUD never holds the keyboard, so ⌘C would copy from the app in front
+ * instead. A copy mark fades in at its end on hover and turns into a check
+ * once copied. */
+export function Notice({
+  text,
+  color,
+  whole = false,
+}: {
+  text: string;
+  color: string;
+  whole?: boolean;
+}) {
+  const copy = usePanelServices()?.copyText;
+  const { language } = useFormat();
+  const [hovered, setHovered] = useState(false);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  const words = (
     <span
-      style={{
-        color,
-        display: "-webkit-box",
-        WebkitLineClamp: 2,
-        WebkitBoxOrient: "vertical",
-        overflow: "hidden",
-      }}
+      style={
+        whole
+          ? { color, display: "block" }
+          : {
+              color,
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }
+      }
     >
       {text}
     </span>
+  );
+  if (!copy) return words;
+  const Mark = copied ? Check : Copy;
+  return (
+    <button
+      type="button"
+      className="hud-notice"
+      title={text}
+      aria-label={
+        copied
+          ? say(language, "已复制", "Copied")
+          : say(language, "复制", "Copy")
+      }
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+      onClick={(event) => {
+        event.stopPropagation();
+        copy(text).then(
+          () => setCopied(true),
+          () => setCopied(false),
+        );
+      }}
+      style={{
+        ...noButtonChrome,
+        position: "relative",
+        display: "block",
+        width: "100%",
+        paddingRight: 16,
+        cursor: "pointer",
+        color,
+      }}
+    >
+      {words}
+      <span
+        aria-hidden
+        style={{
+          position: "absolute",
+          top: 1,
+          right: 0,
+          display: "inline-flex",
+          opacity: hovered || copied ? 1 : 0,
+          transition: "opacity 160ms ease-out",
+        }}
+      >
+        <Mark size={11} strokeWidth={2.25} />
+      </span>
+    </button>
   );
 }

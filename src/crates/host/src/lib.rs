@@ -850,6 +850,7 @@ pub fn run_with_options(
             hud::hud_report_regions,
             hud::hud_drag_start,
             hud::hud_text_focus,
+            hud::hud_copy_text,
             hud_show_main,
             quit_app,
             open_statistics,

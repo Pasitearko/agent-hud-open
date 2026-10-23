@@ -2,8 +2,8 @@
 //! pixels, with Win32 button and modifier state. Geometry, hover and drag state
 //! stay in the shared owner.
 pub(super) use super::generic::{
-    begin_text_focus, end_text_focus, global_pointer, panel_builder, place, set_drag_cursor, shown,
-    TextFocusOrigin,
+    begin_text_focus, copy_text, end_text_focus, global_pointer, panel_builder, place,
+    set_drag_cursor, shown, TextFocusOrigin,
 };
 use super::{base_limitations, HudCapabilities, PointerKeys};
 #[path = "windows/displays.rs"]

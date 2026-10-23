@@ -553,6 +553,19 @@ function AppContent({
       }
     },
     query: (method, params) => act(method, params),
+    copyText: async (text) => {
+      // The HUD panel never holds the keyboard, so the app writes the
+      // clipboard; a host without that, or another window, uses the web one.
+      if (isTauri()) {
+        try {
+          await invoke("hud_copy_text", { text });
+          return;
+        } catch {
+          // Falls through to the web clipboard.
+        }
+      }
+      await navigator.clipboard.writeText(text);
+    },
     openSettingsPage: (page) => {
       if (isTauri()) void invoke("hud_show_main", { page });
     },
