@@ -12,11 +12,14 @@ mod completion;
 mod entry;
 mod inbox;
 mod install;
+mod statusline_install;
+pub use statusline_install::AntigravityCliChange;
 mod observers;
 pub(crate) mod origins;
 pub use observers::{apply_observer_plan, observer_plan, ObserverPlan};
 mod reminders;
 mod reviewer;
+mod statusline;
 mod transcript;
 // The callback channel: a Unix socket, or a named pipe on Windows.
 #[cfg(unix)]
@@ -29,6 +32,7 @@ pub use agent_hud_agents::windows_hook_handler;
 pub use entry::{entry, handle_with_io};
 pub use inbox::record_event;
 pub use install::{apply_plan, install_plan, InstallContext, InstallPlan};
+pub use statusline::account_reports;
 
 pub const PAYLOAD_LIMIT: usize = 1024 * 1024;
 pub type Wake = Arc<dyn Fn() + Send + Sync>;
@@ -98,6 +102,18 @@ impl Hooks {
     }
     pub fn status(&self, desired: bool) -> serde_json::Value {
         self.clients.status(self.is_listening(), desired)
+    }
+    pub fn antigravity_cli_status(&self) -> serde_json::Value {
+        statusline_install::status(self.clients.context())
+    }
+    /// Only an explicit source-setting Save action changes CLI configuration.
+    /// Roll back the returned transaction if saving core preferences fails.
+    pub fn set_antigravity_cli_accounts(
+        &self,
+        previous: &[PathBuf],
+        next: &[PathBuf],
+    ) -> Result<AntigravityCliChange, String> {
+        statusline_install::set_accounts(self.clients.context(), &self.data, previous, next)
     }
     /// Only an explicit preference action installs/uninstalls client adapters.
     /// Process shutdown calls configure(false), leaving the next launch's hooks in place.

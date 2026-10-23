@@ -102,3 +102,50 @@ test("burn rate: sampling is the detail, a run-out before the reset is its time,
   });
   assert.equal(quotaMetric(replies, "tokens", now, zh).detail, "9 次回复");
 });
+
+test("remaining quota changes the figure without changing readings, risk or other measures", () => {
+  const reading = row({
+    usedPercent: 92,
+    status: "critical",
+    metrics: {
+      burnRatePctPerHour: 12.5,
+      outlook: {
+        kind: "exhausts",
+        beforeReset: true,
+        exhaustsAt: "2026-10-21T12:40:00Z",
+      },
+      consumed: { used: 1200, capacity: 3000 },
+    },
+  });
+  const before = JSON.stringify(reading);
+  const remaining = { ...en, quotaDisplay: "remaining" as const };
+  assert.equal(quotaMetric(reading, "quota", now, en).value, "92%");
+  const displayed = quotaMetric(reading, "quota", now, remaining);
+  assert.equal(displayed.value, "8%");
+  assert.match(displayed.hint, /Quota remaining/);
+  assert.deepEqual(
+    quotaMetric(reading, "burn", now, remaining),
+    quotaMetric(reading, "burn", now, en),
+  );
+  assert.deepEqual(
+    quotaMetric(reading, "consumed", now, remaining),
+    quotaMetric(reading, "consumed", now, en),
+  );
+  assert.equal(JSON.stringify(reading), before);
+  assert.equal(
+    quotaMetric(row({ usedPercent: null }), "quota", now, remaining).value,
+    "--",
+  );
+  assert.equal(
+    quotaMetric(
+      row({ usedPercent: null, observedAt: "2026-10-21T11:00:00Z" }),
+      "quota",
+      now,
+      remaining,
+    ).value,
+    "--",
+  );
+  const stale = quotaMetric(row({ status: "stale" }), "quota", now, remaining);
+  assert.equal(stale.value, "60%");
+  assert.match(stale.hint, /stale/);
+});

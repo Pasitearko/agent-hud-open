@@ -10,7 +10,14 @@ import {
 } from "@agent-hud/ui/components/tooltip";
 import { quotaMetric, quotaMetricAvailability } from "../quota-metrics";
 import { useFormat } from "@agent-hud/ui/format-context";
-import { dateFormat, localeDateTime, moneyAmount } from "@agent-hud/ui/format";
+import {
+  dateFormat,
+  localeDateTime,
+  moneyAmount,
+  quotaPercent,
+  quotaPercentLabel,
+  quotaDisplayLabel,
+} from "@agent-hud/ui/format";
 import { quotaAccountKey, quotaShortName, vendorKey } from "../model";
 import { FittingName } from "./FittingName";
 import { AccountHeader, BlockNotice } from "./AccountHeader";
@@ -129,6 +136,17 @@ export function SourceQuotaRow({
   };
   const format = useFormat();
   const reading = quotaMetric(row, measure, now, format);
+  const pct = quotaPercent(row.usedPercent, format.quotaDisplay);
+  const projection =
+    measure === "burn" &&
+    reading.projectedPercent != null &&
+    reading.projectedPercent > (row.usedPercent ?? 0)
+      ? quotaPercent(reading.projectedPercent, format.quotaDisplay)
+      : null;
+  const solidPercent =
+    format.quotaDisplay === "remaining" && projection != null
+      ? projection
+      : pct;
   const quotaLevel =
     row.status === "critical"
       ? colors.critical
@@ -212,10 +230,10 @@ export function SourceQuotaRow({
       {showsTrack ? (
         <span
           role="meter"
-          aria-label={`${row.name} quota used`}
+          aria-label={`${row.name} · ${quotaDisplayLabel(format.quotaDisplay, format.language)}`}
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={row.usedPercent ?? undefined}
+          aria-valuenow={pct ?? undefined}
           style={{
             position: "relative",
             height: 4,
@@ -226,31 +244,28 @@ export function SourceQuotaRow({
             overflow: "hidden",
           }}
         >
-          {measure === "burn" &&
-            reading.projectedPercent != null &&
-            reading.projectedPercent > (row.usedPercent ?? 0) && (
-              <i
-                style={{
-                  position: "absolute",
-                  inset: "0 auto 0 0",
-                  display: "block",
-                  height: 4,
-                  width: `${Math.max(0, Math.min(100, reading.projectedPercent))}%`,
-                  borderRadius: 4,
-                  background: reading.runsOut
-                    ? colors.warning
-                    : colors.secondary,
-                  opacity: 0.38,
-                }}
-              />
-            )}
+          {projection != null && pct != null && (
+            <i
+              style={{
+                position: "absolute",
+                top: 0,
+                left: `${Math.min(pct, projection)}%`,
+                display: "block",
+                height: 4,
+                width: `${Math.abs(projection - pct)}%`,
+                borderRadius: 4,
+                background: reading.runsOut ? colors.warning : colors.secondary,
+                opacity: 0.38,
+              }}
+            />
+          )}
           <i
             style={{
               position: "absolute",
               inset: "0 auto 0 0",
               display: "block",
               height: 4,
-              width: `${Math.max(0, Math.min(100, row.usedPercent ?? 0))}%`,
+              width: `${solidPercent ?? 0}%`,
               borderRadius: 4,
               background:
                 row.status === "stale" ? colors.secondary : quotaLevel,
@@ -366,7 +381,7 @@ export function QuotaWidgets({
               : row.status === "warning"
                 ? colors.warningText
                 : colors.okText;
-        const pct = Math.max(0, Math.min(100, row.usedPercent ?? 0));
+        const pct = quotaPercent(row.usedPercent, format.quotaDisplay) ?? 0;
         return (
           <div
             key={row.id}
@@ -404,6 +419,8 @@ export function QuotaWidgets({
               >
                 <svg
                   viewBox="0 0 60 60"
+                  role="img"
+                  aria-label={`${row.name} · ${quotaDisplayLabel(format.quotaDisplay, format.language)} · ${row.usedPercent == null ? "—" : quotaPercentLabel(row.usedPercent, format.quotaDisplay)}`}
                   style={{
                     width: "100%",
                     height: "100%",
@@ -423,7 +440,7 @@ export function QuotaWidgets({
                     cy="30"
                     r="26"
                     fill="none"
-                    stroke={color}
+                    stroke={pct > 0 ? color : "transparent"}
                     strokeWidth="5"
                     strokeDasharray={`${pct * 1.6336} 163.36`}
                     strokeLinecap="round"
@@ -440,7 +457,9 @@ export function QuotaWidgets({
                     color: figure,
                   }}
                 >
-                  {row.usedPercent == null ? "--" : `${Math.round(pct)}%`}
+                  {row.usedPercent == null
+                    ? "--"
+                    : quotaPercentLabel(row.usedPercent, format.quotaDisplay)}
                 </span>
               </div>
             ) : null}

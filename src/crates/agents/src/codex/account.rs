@@ -7,59 +7,129 @@ use crate::account::{
 use crate::l10n;
 use crate::naming::{vendor_windows, window_names};
 use serde_json::{json, Value};
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashSet,
+    path::Path,
+    time::{Duration, Instant},
+};
 
 /// Where Agent HUD remembers which email signed in to which workspace.
 const IDENTITIES: &str = "codex-identities.json";
 
 pub fn read(host: &dyn Host) -> Result<Reading, String> {
-    let native = read_native(host);
+    let executable = host.executable("codex");
+    let native = match executable.as_deref() {
+        Some(executable) => read_native(host, executable),
+        None => Err(l10n::text(
+            "安装并登录后即可读取额度",
+            "Install and sign in to read quota",
+        )),
+    };
     let pi = read_pi(host);
     match (native, pi) {
         (Ok(mut native), Ok(Some(pi))) => {
-            for quota in pi.quotas {
-                if !native.quotas.iter().any(|row| row["id"] == quota["id"]) {
-                    native.quotas.push(quota);
-                }
-            }
-            if let Some(account) = pi.account {
-                if native
-                    .account
-                    .as_ref()
-                    .is_none_or(|value| value["id"] != account["id"])
-                {
-                    if native.account.is_none() {
-                        native.account = Some(account);
-                    } else {
-                        native.additional_accounts.push(account);
-                    }
-                }
-            }
-            if !native.quotas.is_empty() {
-                native.notice = None;
-            }
+            merge(&mut native, pi);
             Ok(native)
         }
         (Ok(mut native), Err(error)) => {
-            native.notice = Some(error);
+            append_notice(&mut native, error);
             Ok(native)
         }
         (Ok(native), _) => Ok(native),
-        (Err(_), Ok(Some(pi))) => Ok(pi),
-        (Err(_), Err(error)) => Err(error),
+        (Err(error), Ok(Some(mut pi))) => {
+            // Pi can be the only client installed. A configured Codex home
+            // still needs its CLI, so a missing executable matters there.
+            if executable.is_some() || !host.account_homes("codex").is_empty() {
+                append_notice(&mut pi, error);
+            }
+            Ok(pi)
+        }
+        (Err(native), Err(pi)) => Err(format!("{native}\n{pi}")),
         (Err(error), _) => Err(error),
     }
 }
-fn read_native(host: &dyn Host) -> Result<Reading, String> {
-    let executable = host.executable("codex").ok_or_else(|| {
-        l10n::text(
-            "安装并登录后即可读取额度",
-            "Install and sign in to read quota",
-        )
-    })?;
+
+fn append_notice(reading: &mut Reading, notice: String) {
+    match &mut reading.notice {
+        Some(current) => {
+            current.push('\n');
+            current.push_str(&notice);
+        }
+        None => reading.notice = Some(notice),
+    }
+}
+
+fn merge(reading: &mut Reading, other: Reading) {
+    for quota in other.quotas {
+        if !reading.quotas.iter().any(|row| row["id"] == quota["id"]) {
+            reading.quotas.push(quota);
+        }
+    }
+    for account in other.account.into_iter().chain(other.additional_accounts) {
+        if reading
+            .account
+            .iter()
+            .chain(&reading.additional_accounts)
+            .any(|row| row["id"] == account["id"])
+        {
+            continue;
+        }
+        if reading.account.is_none() {
+            reading.account = Some(account);
+        } else {
+            reading.additional_accounts.push(account);
+        }
+    }
+    if let Some(notice) = other.notice {
+        append_notice(reading, notice);
+    }
+}
+
+fn read_native(host: &dyn Host, executable: &Path) -> Result<Reading, String> {
     let home = variable(host, "CODEX_HOME").unwrap_or_else(|| host.home().join(".codex"));
+    let mut seen = HashSet::new();
+    let homes: Vec<_> = std::iter::once(home)
+        .chain(host.account_homes("codex"))
+        .map(|home| host.canonical(&home).unwrap_or(home))
+        .filter(|home| seen.insert(home.clone()))
+        .collect();
+    let mut reading = Reading::empty("codex");
+    let mut succeeded = false;
+    for home in &homes {
+        if host.cancelled() {
+            return Err(l10n::text("账户读取已停止", "Account reading was stopped"));
+        }
+        let result = read_home(host, executable, home);
+        let notice = match result {
+            Ok(mut account) => {
+                succeeded = true;
+                let notice = account.notice.take();
+                merge(&mut reading, account);
+                notice
+            }
+            Err(error) => Some(error),
+        };
+        if let Some(notice) = notice {
+            append_notice(
+                &mut reading,
+                if homes.len() > 1 {
+                    format!("{}: {notice}", home.display())
+                } else {
+                    notice
+                },
+            );
+        }
+    }
+    if succeeded {
+        Ok(reading)
+    } else {
+        Err(reading.notice.unwrap_or_default())
+    }
+}
+
+fn read_home(host: &dyn Host, executable: &Path, home: &Path) -> Result<Reading, String> {
     let mut process = host.start_engine(&EngineStart {
-        executable: &executable,
+        executable,
         args: &["app-server", "--listen", "stdio://"],
         folder: "codex",
         env: &[("CODEX_HOME", home.to_string_lossy().into_owned())],
@@ -124,7 +194,7 @@ fn read_native(host: &dyn Host) -> Result<Reading, String> {
         &limits,
         &account,
         &home.to_string_lossy(),
-        &client_home_key(host, &home, &host.home().join(".codex")),
+        &client_home_key(host, home, &host.home().join(".codex")),
         true,
     )
 }
@@ -522,6 +592,149 @@ mod tests {
         }})
     }
 
+    fn additional(host: &mut FakeHost, home: &Path, limits: Value, account: Value) {
+        host.account_homes
+            .entry("codex".into())
+            .or_default()
+            .push(home.to_path_buf());
+        host.engine_replies_by_home.insert(
+            home.to_path_buf(),
+            installed(limits, account).engine_replies,
+        );
+    }
+
+    #[test]
+    fn each_account_home_uses_its_own_engine_and_keeps_its_windows() {
+        let mut host = installed(limits(), json!({"email": "personal@example.com"}))
+            .env("CODEX_HOME", "/accounts/personal");
+        let work = host.home().join("codex-work");
+        let mut work_limits = limits();
+        work_limits["accountId"] = json!("work");
+        work_limits["rateLimitsByLimitId"]["codex"]["primary"]["usedPercent"] = json!(75);
+        additional(
+            &mut host,
+            &work,
+            work_limits,
+            json!({"email": "work@example.com"}),
+        );
+
+        let reading = read(&host).unwrap();
+        let started = host.started.borrow();
+        assert_eq!(started.len(), 2);
+        assert_eq!(
+            started[0].3,
+            [("CODEX_HOME".to_owned(), "/accounts/personal".to_owned())]
+        );
+        assert_eq!(
+            started[1].3,
+            [("CODEX_HOME".to_owned(), work.to_string_lossy().into_owned())]
+        );
+        assert_eq!(reading.account.unwrap()["label"], "personal@example.com");
+        assert_eq!(reading.additional_accounts.len(), 1);
+        assert_eq!(reading.additional_accounts[0]["label"], "work@example.com");
+        assert_eq!(reading.quotas.len(), 4);
+        assert_eq!(reading.quotas[0]["usedPercent"], 10.0);
+        assert_eq!(reading.quotas[2]["usedPercent"], 75.0);
+        assert_ne!(
+            reading.quotas[0]["accountId"],
+            reading.quotas[2]["accountId"]
+        );
+        assert!(reading.notice.is_none());
+    }
+
+    #[test]
+    fn repeated_homes_and_symlink_aliases_are_read_once() {
+        let mut host = installed(limits(), json!({"email": "a@example.com"}));
+        let default = host.home().join(".codex");
+        let alias = host.home().join("codex-alias");
+        host.canonical_paths.insert(alias.clone(), default.clone());
+        host.account_homes
+            .insert("codex".into(), vec![default, alias]);
+
+        let reading = read(&host).unwrap();
+        assert_eq!(host.started.borrow().len(), 1);
+        assert_eq!(reading.quotas.len(), 2);
+    }
+
+    #[test]
+    fn the_same_subscription_in_different_homes_is_not_duplicated() {
+        let mut host = installed(limits(), json!({"email": "A@example.com"}));
+        let work = host.home().join("codex-work");
+        additional(
+            &mut host,
+            &work,
+            limits(),
+            json!({"email": "a@example.com"}),
+        );
+
+        let reading = read(&host).unwrap();
+        assert_eq!(host.started.borrow().len(), 2);
+        assert_eq!(reading.quotas.len(), 2);
+        assert!(reading.additional_accounts.is_empty());
+    }
+
+    #[test]
+    fn different_workspaces_for_the_same_email_keep_separate_subscriptions() {
+        let mut host = installed(limits(), json!({"email": "a@example.com"}));
+        let work = host.home().join("codex-work");
+        let mut work_limits = limits();
+        work_limits["accountId"] = json!("work");
+        additional(
+            &mut host,
+            &work,
+            work_limits,
+            json!({"email": "a@example.com"}),
+        );
+
+        let reading = read(&host).unwrap();
+        assert_eq!(reading.quotas.len(), 4);
+        assert_eq!(reading.additional_accounts.len(), 1);
+        assert_ne!(
+            reading.account.unwrap()["id"],
+            reading.additional_accounts[0]["id"]
+        );
+    }
+
+    #[test]
+    fn one_failed_home_does_not_hide_another_account_or_its_error() {
+        let mut host = installed(limits(), json!({"email": "a@example.com"}));
+        host.engine_replies
+            .insert(2, json!({"id": 2, "error": {"message": "Sign-in expired"}}));
+        let work = host.home().join("codex-work");
+        additional(
+            &mut host,
+            &work,
+            limits(),
+            json!({"email": "work@example.com"}),
+        );
+        let host = pi_signed_in(host);
+
+        let reading = read(&host).unwrap();
+        assert_eq!(reading.account.unwrap()["label"], "work@example.com");
+        assert_eq!(reading.quotas.len(), 3);
+        assert_eq!(reading.additional_accounts.len(), 1);
+        assert_eq!(host.asked.borrow().len(), 1);
+        let notice = reading.notice.unwrap();
+        assert!(notice.contains("Sign-in expired"));
+        assert!(notice.contains(&*host.home().join(".codex").to_string_lossy()));
+    }
+
+    #[test]
+    fn all_failed_homes_return_an_error_with_each_home() {
+        let mut host = installed(limits(), Value::Null);
+        host.engine_replies
+            .insert(2, json!({"id": 2, "error": {"message": "Sign-in expired"}}));
+        let work = host.home().join("codex-work");
+        host.account_homes
+            .insert("codex".into(), vec![work.clone()]);
+
+        let error = read(&host).err().unwrap();
+        assert_eq!(host.started.borrow().len(), 2);
+        assert!(error.contains(&*host.home().join(".codex").to_string_lossy()));
+        assert!(error.contains(&*work.to_string_lossy()));
+        assert_eq!(error.matches("Sign-in expired").count(), 2);
+    }
+
     #[test]
     fn the_app_server_reports_limits_and_the_account() {
         let host = installed(
@@ -629,6 +842,21 @@ mod tests {
         );
         assert_eq!(host.asked.borrow()[0].1.as_deref(), Some("Bearer tok"));
         assert!(host.headers.borrow()[0].contains(&("ChatGPT-Account-Id".into(), "acc".into())));
+        assert!(reading.notice.is_none());
+    }
+
+    #[test]
+    fn a_configured_codex_home_needs_the_cli_even_when_pi_succeeds() {
+        let mut host = pi_signed_in(FakeHost::new("/u"));
+        let work = host.home().join("codex-work");
+        host.account_homes.insert("codex".into(), vec![work]);
+
+        let reading = read(&host).unwrap();
+        assert_eq!(reading.quotas.len(), 1);
+        assert_eq!(
+            reading.notice.as_deref(),
+            Some("Install and sign in to read quota")
+        );
     }
 
     #[test]
@@ -638,6 +866,60 @@ mod tests {
         assert_eq!(reading.quotas.len(), 3);
         assert_eq!(reading.additional_accounts.len(), 1);
         assert_eq!(reading.additional_accounts[0]["label"], "p@example.com");
+    }
+
+    #[test]
+    fn pi_does_not_duplicate_an_account_in_an_additional_home() {
+        let mut host = installed(limits(), json!({"email": "a@example.com"}));
+        let work = host.home().join("codex-work");
+        let mut work_limits = limits();
+        work_limits["accountId"] = json!("acc");
+        additional(
+            &mut host,
+            &work,
+            work_limits,
+            json!({"email": "p@example.com"}),
+        );
+        let host = pi_signed_in(host);
+
+        let reading = read(&host).unwrap();
+        assert_eq!(reading.quotas.len(), 4);
+        assert_eq!(reading.additional_accounts.len(), 1);
+        assert_eq!(host.asked.borrow().len(), 1);
+        assert!(reading
+            .quotas
+            .iter()
+            .all(|quota| quota["consumerSource"] == "codex"));
+    }
+
+    #[test]
+    fn pi_success_preserves_a_native_account_error() {
+        let mut host = installed(limits(), Value::Null);
+        host.engine_replies
+            .insert(2, json!({"id": 2, "error": {"message": "Sign-in expired"}}));
+        let reading = read(&pi_signed_in(host)).unwrap();
+        assert_eq!(reading.quotas.len(), 1);
+        assert_eq!(reading.notice.as_deref(), Some("Codex: Sign-in expired"));
+    }
+
+    #[test]
+    fn a_pi_error_preserves_an_additional_homes_error() {
+        let mut host = installed(limits(), json!({"email": "a@example.com"})).file(
+            "/u/.pi/agent/auth.json",
+            r#"{"openai-codex": {"type": "oauth", "access": "tok", "accountId": "acc", "expires": 1}}"#,
+        );
+        let work = host.home().join("codex-work");
+        additional(&mut host, &work, limits(), Value::Null);
+        host.engine_replies_by_home
+            .get_mut(&work)
+            .unwrap()
+            .insert(2, json!({"id": 2, "error": {"message": "Sign-in expired"}}));
+
+        let reading = read(&host).unwrap();
+        assert_eq!(reading.quotas.len(), 2);
+        let notice = reading.notice.unwrap();
+        assert!(notice.contains("Sign-in expired"));
+        assert!(notice.contains("Sign in to ChatGPT again in Pi"));
     }
 
     #[test]

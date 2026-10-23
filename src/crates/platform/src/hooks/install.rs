@@ -75,7 +75,7 @@ fn configuration(context: &InstallContext, source: &str, relative: &str) -> Path
         })
         .unwrap_or_else(|| context.home.join(relative))
 }
-fn target(path: &Path) -> Result<PathBuf, String> {
+pub(super) fn target(path: &Path) -> Result<PathBuf, String> {
     let mut path = path.to_owned();
     for _ in 0..32 {
         match fs::read_link(&path) {
@@ -97,7 +97,7 @@ fn target(path: &Path) -> Result<PathBuf, String> {
     }
     Err("Hook settings contain too many symbolic links".into())
 }
-fn contents(path: &Path) -> Result<Option<Vec<u8>>, String> {
+pub(super) fn contents(path: &Path) -> Result<Option<Vec<u8>>, String> {
     match fs::File::open(path) {
         Ok(file) => {
             if file
@@ -194,12 +194,28 @@ pub fn apply_plan(plan: &InstallPlan) -> Result<bool, String> {
             "Client settings changed after this hook plan was prepared; prepare a new plan.",
         ));
     }
-    let directory = plan
-        .target
-        .parent()
-        .ok_or("Hook settings directory unavailable")?;
+    let mut bytes =
+        serde_json::to_vec_pretty(&plan.updated).map_err(|_| "Hook settings could not be saved")?;
+    bytes.push(b'\n');
+    write_contents(&plan.target, Some(&bytes))?;
+    Ok(true)
+}
+
+/// Atomic settings replacement shared by reversible explicit installers.
+/// The caller checks its plan immediately before writing or removing the file.
+pub(super) fn write_contents(path: &Path, bytes: Option<&[u8]>) -> Result<(), String> {
+    let Some(bytes) = bytes else {
+        return match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err("Hook settings could not be removed".into()),
+        };
+    };
+    let directory = path.parent().ok_or("Hook settings directory unavailable")?;
     fs::create_dir_all(directory).map_err(|_| "Hook settings directory unavailable")?;
-    let permissions = fs::metadata(&plan.target).ok().map(|m| m.permissions());
+    let permissions = fs::metadata(path)
+        .ok()
+        .map(|metadata| metadata.permissions());
     let temporary = directory.join(format!(
         ".agent-hud-hook-{}-{}.tmp",
         std::process::id(),
@@ -215,13 +231,7 @@ pub fn apply_plan(plan: &InstallPlan) -> Result<bool, String> {
                 "Hook settings could not be saved",
             )
         })?;
-        serde_json::to_writer_pretty(&mut file, &plan.updated).map_err(|_| {
-            l10n::text(
-                "无法保存客户端的回调设置",
-                "Hook settings could not be saved",
-            )
-        })?;
-        file.write_all(b"\n").map_err(|_| {
+        file.write_all(bytes).map_err(|_| {
             l10n::text(
                 "无法保存客户端的回调设置",
                 "Hook settings could not be saved",
@@ -235,13 +245,13 @@ pub fn apply_plan(plan: &InstallPlan) -> Result<bool, String> {
                 )
             })?;
         }
-        fs::rename(&temporary, &plan.target).map_err(|_| {
+        fs::rename(&temporary, path).map_err(|_| {
             l10n::text(
                 "无法保存客户端的回调设置",
                 "Hook settings could not be saved",
             )
         })?;
-        Ok(true)
+        Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(temporary);

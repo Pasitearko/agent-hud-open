@@ -43,8 +43,12 @@ mod running {
     }
 
     pub(super) fn servers() -> Result<Vec<Server>, String> {
+        Ok(parse_servers(crate::os::processes()?))
+    }
+
+    fn parse_servers(processes: Vec<crate::os::ProcessInfo>) -> Vec<Server> {
         let mut result = Vec::new();
-        for process in crate::os::processes()? {
+        for process in processes {
             let pid = process.pid;
             let command = process.command.as_str();
             let executable = process.executable.to_lowercase();
@@ -54,6 +58,8 @@ mod running {
                 && (executable.contains("antigravity.app/")
                     || executable.contains("antigravity ide.app/")
                     || executable.contains("/antigravity/")
+                    || executable.contains("/antigravity-cli/")
+                    || executable.contains("/antigravity_cli/")
                     || flag(command, "app_data_dir")
                         .is_some_and(|path| path.starts_with("antigravity")));
             if !server && !cli {
@@ -79,7 +85,75 @@ mod running {
             });
         }
         result.sort_by_key(|server| (server.priority, server.pid));
-        Ok(result)
+        result
+    }
+
+    /// The CLI's own executable, rather than another `agy` found on PATH.
+    /// A token-less CLI still supports its read-only `/usage` command.
+    pub(super) fn cli_executable() -> Result<Option<String>, String> {
+        Ok(cli_from(crate::os::processes()?))
+    }
+
+    fn cli_from(processes: Vec<crate::os::ProcessInfo>) -> Option<String> {
+        processes.into_iter().find_map(|process| {
+            let path = std::path::Path::new(&process.executable);
+            (path.is_absolute() && path.file_name().is_some_and(|name| name == "agy"))
+                .then_some(process.executable)
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn process(pid: u32, executable: &str, command: &str) -> crate::os::ProcessInfo {
+            crate::os::ProcessInfo {
+                pid,
+                executable: executable.into(),
+                command: command.into(),
+            }
+        }
+
+        #[test]
+        fn discovers_all_authenticated_native_and_cli_servers() {
+            let found = parse_servers(vec![
+                process(
+                    1,
+                    "/Applications/Antigravity.app/language_server",
+                    "server --csrf_token fixture-1",
+                ),
+                process(
+                    2,
+                    "/u/.gemini/antigravity-cli/language_server",
+                    "server --csrf_token fixture-2",
+                ),
+                process(3, "/bin/agy", "agy"),
+                process(
+                    4,
+                    "/unrelated/language_server",
+                    "server --csrf_token fixture-4",
+                ),
+                process(
+                    5,
+                    "/Applications/Antigravity IDE.app/language-server",
+                    "server --csrf_token fixture-5",
+                ),
+            ]);
+            assert_eq!(
+                found.iter().map(|server| server.pid).collect::<Vec<_>>(),
+                [1, 2, 5]
+            );
+        }
+
+        #[test]
+        fn tokenless_cli_fallback_uses_the_executable_not_command_arguments() {
+            let found = cli_from(vec![
+                process(1, "/bin/sh", "sh /bin/agy"),
+                process(2, "/installed/agy", "agy"),
+            ]);
+            assert_eq!(found.as_deref(), Some("/installed/agy"));
+            assert!(cli_from(vec![process(1, "agy", "agy")]).is_none());
+        }
     }
 }
 
@@ -266,6 +340,41 @@ pub fn endpoints(fresh: bool) -> Result<Vec<Endpoint>, String> {
         ));
     }
     service()?.discover(fresh, true)
+}
+
+/// Read every currently running service, serially. Each response keeps the
+/// identity of its own endpoint so anonymous services cannot be conflated.
+/// The account reader uses the CLI fallback only when no native quota is usable.
+pub fn read_accounts(params: &Value) -> Result<Value, String> {
+    if !crate::clients::runs(&agent_hud_agents::antigravity::LOCAL_SERVICE) {
+        return Err(format!(
+            "Antigravity local service acquisition is unsupported on {}",
+            std::env::consts::OS
+        ));
+    }
+    let service = service()?;
+    let endpoints = service.discover(true, false)?;
+    let mut partial = service
+        .state
+        .lock()
+        .map(|state| !state.complete)
+        .unwrap_or(true);
+    let mut accounts = Vec::new();
+    for endpoint in endpoints {
+        match service.send(&endpoint, "GetUserStatus", params) {
+            Ok(status) => accounts.push(json!({"source":endpoint.identity(),"status":status})),
+            Err(_) => partial = true,
+        }
+    }
+    let cli = match running::cli_executable() {
+        Ok(cli) => cli,
+        Err(error) if accounts.is_empty() => return Err(error),
+        Err(_) => {
+            partial = true;
+            None
+        }
+    };
+    Ok(json!({"accounts":accounts,"partial":partial,"cliExecutable":cli}))
 }
 /// Quota reads may use the first readable service. Pending permissions instead
 /// retain and revalidate an explicit Endpoint through `endpoints(true)`.

@@ -19,6 +19,8 @@ export interface TokenTotals {
 }
 export interface Quota {
   id: string;
+  /** A sampled CLI report, whose freshness follows observedAt. */
+  source?: "antigravity_cli";
   /** Stable old-provider identities used by saved account/row visibility. */
   accountId?: string | null;
   legacyWindowId?: string | null;
@@ -289,17 +291,19 @@ export interface Provider {
 }
 export interface Account {
   id: string;
+  /** A sampled CLI report, whose freshness follows checkedAt. */
+  source?: "antigravity_cli";
   provider: string;
   label: string | null;
   plan: string | null;
   checkedAt: string | null;
-  /** The last read failed; the readings shown are the last good ones. */
+  /** The last read failed or the client's last report is no longer fresh. */
   stale: boolean;
   /** From Core: the label, else "Account" and the id's end. */
   name?: string;
   /** From Core: the plan in the provider's tier names ("Max x20"). */
   planLabel?: string | null;
-  /** From Core: signed in now. Next keeps no former accounts, so always true. */
+  /** From Core: included in the current account inventory. */
   current?: boolean;
   /** From Core: why the last read failed, from its client; shown in amber. */
   warning?: string | null;
@@ -448,6 +452,12 @@ export interface SourcePreferences {
   reminders?: boolean;
 }
 export interface AppSettings {
+  /** Display quota percentages as used or available; readings remain usedPercent. */
+  quotaDisplay?: "consumed" | "remaining";
+  /** Additional Codex CLI homes whose signed-in accounts should be read. */
+  codexHomes?: string[];
+  /** CLI settings files connected to Antigravity's account status callback. */
+  antigravityCliSettings?: string[];
   appearance: "dark" | "light" | "system";
   language: string;
   clientHooks: boolean;
@@ -784,6 +794,7 @@ export type NativeMethod =
   | "sessions"
   | "refresh"
   | "set_setting"
+  | "antigravity_cli_status"
   | "set_provider"
   | "answer_request"
   | "session_detail"

@@ -461,8 +461,8 @@ export function DisplayPane({
                 "showsNumbers",
                 t("Show numbers", "显示数字"),
                 t(
-                  "The percentage used, beside the mark.",
-                  "在标志旁写出已用百分比。",
+                  "The quota percentage, using your Usage display setting.",
+                  "按「用量显示」设置，在标志旁显示额度百分比。",
                 ),
               )}
             </>

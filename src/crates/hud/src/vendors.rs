@@ -102,10 +102,20 @@ pub fn configured<'a>(
     named
 }
 
+/// A display percentage; stored readings and quota severity always use consumed usage.
+pub fn quota_percent(used: f64, remaining: bool) -> f64 {
+    let used = used.clamp(0.0, 100.0);
+    if remaining {
+        100.0 - used
+    } else {
+        used
+    }
+}
+
 /// The number a Simple HUD writes beside a mark.
-pub fn meter_label(vendor: &Vendor) -> String {
+pub fn meter_label(vendor: &Vendor, remaining: bool) -> String {
     match vendor.used {
-        Some(used) => format!("{}%", used.round()),
+        Some(used) => format!("{}%", quota_percent(used, remaining).round()),
         None => vendor.balance.clone().unwrap_or_else(|| "--".into()),
     }
 }
@@ -267,8 +277,10 @@ mod tests {
         assert_eq!(simple[1].used, None);
         assert_eq!(simple[1].level, "stale");
         assert_eq!(simple[2].balance.as_deref(), Some("¥8.85"));
-        assert_eq!(meter_label(&simple[0]), "72%");
-        assert_eq!(meter_label(&simple[2]), "¥8.85");
+        assert_eq!(meter_label(&simple[0], false), "72%");
+        assert_eq!(meter_label(&simple[0], true), "28%");
+        assert_eq!(simple[0].used, Some(72.4));
+        assert_eq!(meter_label(&simple[2], false), "¥8.85");
         let named = configured(
             &snapshot,
             "simple",
@@ -315,7 +327,7 @@ mod tests {
             let codex = rows.iter().find(|row| row.key == "openai").unwrap();
             assert_eq!(codex.used, None);
             assert!(codex.quotas.is_empty());
-            assert_eq!(meter_label(codex), "--");
+            assert_eq!(meter_label(codex, false), "--");
             let selected = configured(&snapshot, mode, &json!({"hud":{"agents":["codex"]}}), now);
             assert_eq!(selected.len(), 1);
             assert_eq!(selected[0].key, "openai");

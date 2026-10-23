@@ -5,6 +5,8 @@ import {
   countdownCompact,
   dateFormat,
   percent,
+  quotaPercent,
+  quotaDisplayLabel,
   resetLabelCompact,
   type FormatSettings,
   type Language,
@@ -27,6 +29,7 @@ export function quotaAlertCopy(event: IslandEvent, settings: FormatSettings) {
   const { language } = settings;
   const remaining = remainingOf(event);
   const usedPct = remaining == null ? null : Math.max(0, 100 - remaining);
+  const displayPct = quotaPercent(event.usedPercent, settings.quotaDisplay);
   const isReset = event.kind === "quota-reset";
   const forecast = event.timeToExhaustSeconds;
   const exhaustion =
@@ -41,6 +44,9 @@ export function quotaAlertCopy(event: IslandEvent, settings: FormatSettings) {
     .filter((name): name is string => Boolean(name));
   const names = others.join("、");
   return {
+    displayPct,
+    display: displayPct == null ? "N/A" : percent(displayPct),
+    displayLabel: quotaDisplayLabel(settings.quotaDisplay, language),
     usedPct,
     used: usedPct == null ? "N/A" : percent(usedPct),
     remaining: remaining == null ? "N/A" : percent(remaining),

@@ -14,18 +14,21 @@ const FormatContext = createContext<FormatSettings>({
 /** Provides the language for `setting` ("system", "en", "zh-Hans" …) and this machine's calendar. */
 export function FormatProvider({
   setting,
+  quotaDisplay = "consumed",
   children,
 }: {
   setting: string | null | undefined;
+  quotaDisplay?: FormatSettings["quotaDisplay"];
   children: ReactNode;
 }) {
   const value = useMemo<FormatSettings>(() => {
     const locale = systemLocale();
     return {
       language: resolveLanguage(setting, locale),
+      quotaDisplay,
       calendar: systemCalendar(locale),
     };
-  }, [setting]);
+  }, [setting, quotaDisplay]);
   return (
     <FormatContext.Provider value={value}>{children}</FormatContext.Provider>
   );

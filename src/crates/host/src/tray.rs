@@ -20,6 +20,7 @@ pub(crate) struct Presentation {
     glow_hidden: bool,
     light: bool,
     used_percent: Option<f64>,
+    remaining: bool,
     levels: Vec<Level>,
     entries: Vec<Entry>,
     /// The product's newer version, for New Version….
@@ -34,6 +35,7 @@ impl Default for Presentation {
             glow_hidden: false,
             light: false,
             used_percent: None,
+            remaining: false,
             levels: vec![],
             entries: vec![],
             update: None,
@@ -147,6 +149,7 @@ pub(crate) fn project(
     now_ms: i64,
 ) -> Presentation {
     let zh = snapshot["language"] == "zh";
+    let remaining = snapshot["settings"]["quotaDisplay"] == "remaining";
     let mut entries = vec![];
     let quota_vendors: Vec<&Vendor> = vendors
         .iter()
@@ -174,7 +177,10 @@ pub(crate) fn project(
         for quota in &vendor.quotas {
             let value = match quota["usedPercent"].as_f64() {
                 Some(used) => {
-                    let percent = format!("{}%", used.round());
+                    let percent = format!(
+                        "{}%",
+                        crate::vendors::quota_percent(used, remaining).round()
+                    );
                     match quota["resetAt"]
                         .as_str()
                         .and_then(|at| reset_countdown(at, now_ms))
@@ -219,6 +225,7 @@ pub(crate) fn project(
         glow_hidden,
         light,
         used_percent,
+        remaining,
         levels: if paused {
             vec![]
         } else {
@@ -248,17 +255,26 @@ pub(crate) fn apply(app: &tauri::AppHandle, state: Presentation) -> Result<(), S
     let value = state
         .used_percent
         .filter(|value| value.is_finite())
-        .map_or_else(|| "—".into(), |value| format!("{}%", value.round()));
+        .map_or_else(
+            || "—".into(),
+            |value| {
+                format!(
+                    "{}%",
+                    crate::vendors::quota_percent(value, state.remaining).round()
+                )
+            },
+        );
     tray.set_icon_with_as_template(Some(status_icon(&state)), false)
         .map_err(|e| e.to_string())?;
     tray.set_title(Some(format!(" {value}")))
         .map_err(|e| e.to_string())?;
     tray.set_tooltip(Some(format!(
         "Agent HUD · {}: {value}",
-        if chinese {
-            "最高已用额度"
-        } else {
-            "highest usage"
+        match (chinese, state.remaining) {
+            (true, true) => "最低剩余额度",
+            (true, false) => "最高已用额度",
+            (false, true) => "lowest remaining quota",
+            (false, false) => "highest usage",
         }
     )))
     .map_err(|e| e.to_string())?;
@@ -493,6 +509,36 @@ mod tests {
         let state = project(&paused, &agents, true, true, false, None, now);
         assert_eq!(titles(&state), ["Kimi", "暂无额度读数 —"]);
         assert!(state.levels.is_empty() && state.glow_hidden && state.used_percent.is_none());
+    }
+
+    #[test]
+    fn remaining_display_changes_menu_figures_but_keeps_the_tightest_window_and_risk() {
+        let snapshot = json!({
+            "language": "en", "settings": {},
+            "quotas": [
+                {"vendor":"claude", "name":"5h", "usedPercent":0.0, "status":"normal"},
+                {"vendor":"claude", "name":"Week", "usedPercent":92.0, "status":"critical"},
+                {"vendor":"codex", "name":"5h", "usedPercent":null, "status":"stale"}
+            ],
+            "billing":[], "providers":[], "approvals":[], "sessions":[]
+        });
+        let agents = crate::vendors::vendors(&snapshot, "simple", 0);
+        let consumed = project(&snapshot, &agents, true, false, false, None, 0);
+        let mut remaining_snapshot = snapshot.clone();
+        remaining_snapshot["settings"]["quotaDisplay"] = json!("remaining");
+        let remaining = project(&remaining_snapshot, &agents, true, false, false, None, 0);
+        assert_eq!(
+            titles(&remaining),
+            ["Claude", "5h 100%", "Week 8%", "—", "OpenAI", "5h —"]
+        );
+        assert!(remaining.remaining);
+        assert_eq!(remaining.used_percent, Some(92.0));
+        assert_eq!(remaining.used_percent, consumed.used_percent);
+        assert!(remaining.levels == consumed.levels);
+        assert_eq!(
+            crate::vendors::quota_percent(remaining.used_percent.unwrap(), remaining.remaining),
+            8.0
+        );
     }
 
     #[test]

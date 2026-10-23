@@ -1,3 +1,4 @@
+import type { QuotaDisplay } from "@agent-hud/ui/format";
 import {
   HUD_METRICS,
   meterLabel,
@@ -104,6 +105,7 @@ export function labelWidth(text: string, size: number): number {
 export function stripMetrics(
   config: HUDConfig,
   vendors: HUDVendor[],
+  display?: QuotaDisplay,
 ): StripMetrics {
   const horizontal = config.edge === "top" || config.edge === "bottom";
   const n = vendors.length;
@@ -161,7 +163,9 @@ export function stripMetrics(
   const widths = vendors.map(
     (v) =>
       mark +
-      (config.showsNumbers ? labelGap + labelWidth(meterLabel(v), font) : 0),
+      (config.showsNumbers
+        ? labelGap + labelWidth(meterLabel(v, display), font)
+        : 0),
   );
   const run = n
     ? (horizontal ? widths.reduce((a, b) => a + b, 0) : n * mark) +

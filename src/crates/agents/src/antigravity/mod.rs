@@ -1,8 +1,10 @@
 //! Antigravity.
 pub mod account;
+mod cli;
 mod hooks;
 pub mod permissions;
 pub mod proto;
+pub mod statusline;
 
 use crate::Discovery;
 use crate::{Agent, Carries, Channel, PerOs, Support};

@@ -20,6 +20,9 @@ fn observed(source: &str) -> bool {
     agent_hud_agents::by_id(source).is_some_and(|agent| agent.observer.is_some())
 }
 impl Clients {
+    pub(super) fn context(&self) -> Option<&InstallContext> {
+        self.context.as_ref()
+    }
     pub fn delegate(&mut self, context: InstallContext) -> Result<(), String> {
         install::canonical(&context)?;
         self.context = Some(context);

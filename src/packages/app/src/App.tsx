@@ -598,7 +598,12 @@ function AppContent({
   };
   // Every formatter below takes the interface language and calendar from here.
   const provide = (node: ReactNode) => (
-    <FormatProvider setting={snapshotLanguage(snapshot)}>{node}</FormatProvider>
+    <FormatProvider
+      setting={snapshotLanguage(snapshot)}
+      quotaDisplay={snapshot?.settings.quotaDisplay}
+    >
+      {node}
+    </FormatProvider>
   );
   if (surface)
     return provide(

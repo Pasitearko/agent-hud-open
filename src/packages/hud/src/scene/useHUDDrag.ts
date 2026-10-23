@@ -115,7 +115,11 @@ export function useHUDDrag({
       collapse();
     }
     const sourceVendors = configuredVendors(snapshot, sourceConfig);
-    const sourceMetrics = stripMetrics(sourceConfig, sourceVendors);
+    const sourceMetrics = stripMetrics(
+      sourceConfig,
+      sourceVendors,
+      snapshot.settings.quotaDisplay,
+    );
     const sourceStrip =
       sourceConfig.mode === "notch" && notchFrame
         ? notchFrame
@@ -138,10 +142,12 @@ export function useHUDDrag({
         horizontal: stripMetrics(
           { ...sourceConfig, mode: targetMode, edge: "top" },
           targetVendors,
+          snapshot.settings.quotaDisplay,
         ).width,
         vertical: stripMetrics(
           { ...sourceConfig, mode: targetMode, edge: "right" },
           targetVendors,
+          snapshot.settings.quotaDisplay,
         ).height,
       },
     };

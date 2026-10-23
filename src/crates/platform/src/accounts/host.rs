@@ -45,6 +45,12 @@ impl Host for AccountContext {
     fn env(&self, name: &str) -> Option<&str> {
         crate::os::environment_value(&self.env, name)
     }
+    fn account_homes(&self, agent: &str) -> Vec<PathBuf> {
+        self.account_homes.get(agent).cloned().unwrap_or_default()
+    }
+    fn account_reports(&self, agent: &str) -> Vec<Value> {
+        crate::hooks::account_reports(&self.data_dir, agent, &self.account_homes(agent))
+    }
     fn read_file(&self, path: &Path, limit: u64) -> Answer<Vec<u8>> {
         let mut bytes = Vec::new();
         match fs::File::open(path).and_then(|file| file.take(limit + 1).read_to_end(&mut bytes)) {
@@ -141,7 +147,11 @@ impl Host for AccountContext {
     }
     fn native(&self, agent: &str, method: &str, params: &Value) -> Result<Value, String> {
         if agent == agent_hud_agents::antigravity::AGENT.id {
-            crate::clients::antigravity::service::call(method, params)
+            if method == "ReadAccounts" {
+                crate::clients::antigravity::service::read_accounts(params)
+            } else {
+                crate::clients::antigravity::service::call(method, params)
+            }
         } else {
             Err(format!("{agent} has no native channel"))
         }

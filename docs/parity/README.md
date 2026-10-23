@@ -20,6 +20,8 @@ The native Swift app, [agent-hud-native-open](https://github.com/jazzenchen/agen
 
 Deliberate differences:
 
+- Decided 2026-10-22 (issue #3): Settings → General → Usage display can show consumed (the default) or remaining quota. Percentages, rings and bars follow this choice, including the menu bar and reminders; source readings, warning levels, burn rates and exhaustion forecasts remain based on consumed usage.
+
 - The HUD has no glass material: every look is solid, with a transparency (decided 2026-10-21, after the React Bits / Liquid Glass look proved out of reach in the WebView; c07 #57).
 - Next keeps its own settings and database, reads legacy preferences once and never writes Open's database. The one-time import of quota history reads `usage-ledger.sqlite` from the Application Support folder named by the `AgentHUDDataDirectory` key in the Info.plist of the installed `Agent HUD.app` (in `/Applications` or `~/Applications`); with no such key it reads Agent HUD Open's folder. An in-place update replaces that bundle with the app built on Next, so a product that updates an earlier app in place must declare the same key, or the import misses the earlier app's ledger.
 - Demo mode only through `--demo`.
@@ -38,21 +40,21 @@ Open is the floor, not the ceiling. Next must not do worse than Open; where it c
 
 | Chunk | Open scope | Rows | same | deliberate | better | fixed | missing | differs | unclear |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| [c01](c01-claude-codex.md) | Claude, Codex, provider kit | 132 | 47 | 4 | 9 | 51 | 1 | 15 | 5 |
+| [c01](c01-claude-codex.md) | Claude, Codex, provider kit | 132 | 46 | 5 | 9 | 51 | 1 | 15 | 5 |
 | [c02](c02-deepseek-catalog.md) | DeepSeek, provider catalog, window names | 43 | 10 | 0 | 1 | 5 | 3 | 21 | 3 |
 | [c02a](c02a-grok-devin.md) | Grok CLI, Grok Bot, Devin | 55 | 18 | 3 | 0 | 2 | 11 | 20 | 1 |
-| [c02b](c02b-antigravity-cursor.md) | Antigravity, Cursor | 50 | 21 | 1 | 0 | 4 | 7 | 17 | 0 |
+| [c02b](c02b-antigravity-cursor.md) | Antigravity, Cursor | 51 | 21 | 1 | 2 | 5 | 6 | 16 | 0 |
 | [c02c](c02c-buddy-copilot-qwen-zcode-hermes-openclaw.md) | CodeBuddy/WorkBuddy, Copilot, Qwen, ZCode, Hermes, OpenClaw | 70 | 29 | 0 | 1 | 7 | 4 | 26 | 3 |
 | [c02d](c02d-openagents-additional.md) | Kimi, OpenCode/Go, GLM, Pi, additional sources | 57 | 16 | 2 | 0 | 4 | 6 | 28 | 1 |
 | [c03](c03-hooks-store-ledger.md) | Hooks, permissions, collector, store, ledger | 104 | 44 | 6 | 6 | 4 | 8 | 28 | 8 |
 | [c04](c04-models-logic.md) | Models, quota math, session phases, formatting, demo | 122 | 52 | 3 | 4 | 18 | 12 | 26 | 7 |
 | [c05](c05-panel-mcp.md) | Panel layout, HUD style, MCP tools | 96 | 24 | 5 | 1 | 16 | 2 | 47 | 1 |
-| [c06](c06-notch-surface.md) | Island, hover panel, Simple mode, HUD windows | 119 | 40 | 3 | 1 | 20 | 11 | 41 | 3 |
+| [c06](c06-notch-surface.md) | Island, hover panel, Simple mode, HUD windows | 119 | 40 | 5 | 1 | 18 | 11 | 41 | 3 |
 | [c07](c07-glow-alerts-theme.md) | Glow, alerts, permission cards, theme | 119 | 39 | 3 | 4 | 24 | 6 | 39 | 4 |
 | [c08](c08-bots.md) | Bots and Clawd | 58 | 35 | 1 | 2 | 1 | 1 | 15 | 3 |
 | [c09](c09-app-settings.md) | App lifecycle, Settings, menu bar | 90 | 26 | 6 | 5 | 7 | 9 | 32 | 5 |
 | [c10](c10-statistics-debug.md) | Statistics, sessions window, debug, recording | 101 | 14 | 1 | 9 | 13 | 8 | 54 | 2 |
-| **Total** | | **1,216** | **415** | **38** | **43** | **176** | **89** | **409** | **46** |
+| **Total** | | **1,217** | **414** | **41** | **45** | **175** | **88** | **408** | **46** |
 
 `pnpm run parity:ledger` recounts this table from the rows; `pnpm run check` fails when it is stale.
 

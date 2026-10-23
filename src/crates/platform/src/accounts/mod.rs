@@ -19,6 +19,7 @@ use std::{
 
 mod credentials;
 mod engine;
+mod homes;
 mod host;
 pub(crate) mod http;
 mod restart_copy;
@@ -28,6 +29,7 @@ pub(super) struct AccountContext {
     pub home: PathBuf,
     pub data_dir: PathBuf,
     pub env: HashMap<String, String>,
+    pub account_homes: HashMap<String, Vec<PathBuf>>,
     pub http: Client,
     pub children: Arc<Mutex<Vec<Weak<Mutex<Child>>>>>,
     pub cancelled: Arc<AtomicBool>,
@@ -108,6 +110,7 @@ struct Control {
     live: HashSet<String>,
     finished: HashMap<String, i64>,
     entries: BTreeMap<&'static str, Entry>,
+    account_homes: HashMap<String, Vec<PathBuf>>,
     waker: Option<Waker>,
 }
 struct Shared {
@@ -153,7 +156,9 @@ impl AccountService {
             })?;
         let children = Arc::new(Mutex::new(Vec::new()));
         let cancelled = Arc::new(AtomicBool::new(false));
-        let entries = restart_copy::load(&data_dir, readers)
+        let restored = restart_copy::load(&data_dir, readers);
+        let entries = restored
+            .readings
             .into_iter()
             .map(|(reading, checked_at)| {
                 let attempted_ms = date_ms(&checked_at).unwrap_or_default();
@@ -174,6 +179,7 @@ impl AccountService {
             home,
             data_dir,
             env: std::env::vars().collect(),
+            account_homes: HashMap::new(),
             http,
             children: Arc::clone(&children),
             cancelled: Arc::clone(&cancelled),
@@ -188,6 +194,7 @@ impl AccountService {
                 live: HashSet::new(),
                 finished: HashMap::new(),
                 entries,
+                account_homes: restored.account_homes,
                 waker: None,
             }),
             wake: Condvar::new(),
@@ -208,6 +215,17 @@ impl AccountService {
     }
     pub fn credentials_status(&self) -> Value {
         credentials::status(&self.context)
+    }
+    pub fn validate_account_homes(&self, value: &Value) -> Result<(), String> {
+        homes::paths(&self.context.home, value).map(|_| ())
+    }
+    pub fn account_changed(&self, provider: &str) {
+        if let Ok(mut state) = self.shared.state.lock() {
+            if state.enabled.contains(provider) {
+                state.force.insert(provider.into());
+                self.shared.wake.notify_all();
+            }
+        }
     }
     pub fn set_credentials(&self, params: &Value) -> Result<Value, String> {
         let _guard = self.credential_lock.lock().map_err(|_| {
@@ -258,7 +276,7 @@ impl AccountService {
         if let Ok(mut state) = self.shared.state.lock() {
             // The next launch starts from what the app shows now.
             if !state.stopped {
-                copy = Some(restart_copy::copy(&state.entries));
+                copy = Some(restart_copy::copy(&state.entries, &state.account_homes));
             }
             state.stopped = true;
             self.shared.wake.notify_all();
@@ -291,6 +309,7 @@ impl AccountService {
         }
     }
     pub fn update_sources(&self, snapshot: &Value) {
+        let account_homes = homes::configured(&self.context.home, &snapshot["settings"]);
         let consent = snapshot["settings"][agent_hud_agents::copilot::account::CONSENT] == true;
         if self.context.copilot_consent.swap(consent, Ordering::AcqRel) != consent {
             if let Ok(mut state) = self.shared.state.lock() {
@@ -334,6 +353,16 @@ impl AccountService {
         {
             enabled.insert("codex".into());
         }
+        for provider in account_homes.keys() {
+            if snapshot["providers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|value| value["id"] == *provider && value["enabled"] == true)
+            {
+                enabled.insert(provider.clone());
+            }
+        }
         let cutoff = chrono::Utc::now().timestamp_millis() - 300_000;
         let mut running = HashSet::new();
         let mut live = HashSet::new();
@@ -362,6 +391,21 @@ impl AccountService {
             }
         }
         if let Ok(mut state) = self.shared.state.lock() {
+            if state.account_homes != account_homes {
+                let changed = state
+                    .account_homes
+                    .keys()
+                    .chain(account_homes.keys())
+                    .filter(|key| state.account_homes.get(*key) != account_homes.get(*key))
+                    .cloned()
+                    .collect::<HashSet<_>>();
+                for provider in changed {
+                    state.entries.remove(provider.as_str());
+                    state.force.insert(provider);
+                }
+                state.account_homes = account_homes;
+                self.shared.wake.notify_all();
+            }
             if state.enabled != enabled
                 || state.running != running
                 || state.live != live
@@ -380,6 +424,7 @@ impl AccountService {
             return AccountProjection::default();
         };
         let mut result = AccountProjection::default();
+        let now = chrono::Utc::now().timestamp_millis();
         for (provider, _) in READERS {
             if !state.enabled.contains(provider) {
                 continue;
@@ -391,27 +436,34 @@ impl AccountService {
                 );
                 continue;
             };
-            result
-                .quotas
-                .extend(entry.reading.quotas.iter().cloned().map(|mut row| {
-                    if row["observedAt"].is_null() {
-                        row["observedAt"] = json!(entry.checked_at);
-                    }
-                    if row["accountId"].is_null() {
-                        if let Some(account) = entry.reading.account.as_ref() {
-                            row["accountId"] = account["id"].clone();
+            result.quotas.extend(
+                entry
+                    .reading
+                    .quotas
+                    .iter()
+                    .filter(|row| !expired_cli_sample(row, "observedAt", now))
+                    .cloned()
+                    .map(|mut row| {
+                        if row["observedAt"].is_null() {
+                            row["observedAt"] = json!(entry.checked_at);
                         }
-                    }
-                    if entry.failed
-                        || row["resetAt"]
-                            .as_str()
-                            .and_then(date_ms)
-                            .is_some_and(|at| at <= chrono::Utc::now().timestamp_millis())
-                    {
-                        row["status"] = json!("stale");
-                    }
-                    row
-                }));
+                        if row["accountId"].is_null() {
+                            if let Some(account) = entry.reading.account.as_ref() {
+                                row["accountId"] = account["id"].clone();
+                            }
+                        }
+                        if entry.failed
+                            || stale_cli_sample(&row, "observedAt", now)
+                            || row["resetAt"]
+                                .as_str()
+                                .and_then(date_ms)
+                                .is_some_and(|at| at <= chrono::Utc::now().timestamp_millis())
+                        {
+                            row["status"] = json!("stale");
+                        }
+                        row
+                    }),
+            );
             result
                 .billing
                 .extend(entry.reading.billing.iter().cloned().map(|mut row| {
@@ -431,11 +483,18 @@ impl AccountService {
                 .iter()
                 .chain(&entry.reading.additional_accounts)
             {
+                if expired_cli_sample(account, "checkedAt", now) {
+                    continue;
+                }
                 let mut account = account.clone();
                 if account["checkedAt"].is_null() {
                     account["checkedAt"] = json!(entry.checked_at);
                 }
-                account["stale"] = json!(entry.failed);
+                account["stale"] = json!(
+                    entry.failed
+                        || account["stale"] == true
+                        || stale_cli_sample(&account, "checkedAt", now)
+                );
                 result.accounts.push(account);
             }
             result
@@ -509,7 +568,10 @@ fn run(
                 } else if let Some(selected) = due {
                     if burst.is_none_or(|started| started.elapsed() < STEP_BUDGET) {
                         resume_at = None;
-                        break selected;
+                        // Consume the request this job serves. A callback arriving
+                        // during I/O remains pending for the next permitted pass.
+                        state.force.remove(selected.0);
+                        break (selected.0, selected.1, state.account_homes.clone());
                     }
                     burst = None;
                     resume_at = Some(now + STEP_BUDGET);
@@ -532,7 +594,9 @@ fn run(
             if shared.cancelled.load(Ordering::Acquire) {
                 return;
             }
-            (selected.1)(&context)
+            let mut reading_context = context.clone();
+            reading_context.account_homes = selected.2.clone();
+            (selected.1)(&reading_context)
         };
         let (waker, copy) = {
             let Ok(mut state) = shared.state.lock() else {
@@ -540,6 +604,10 @@ fn run(
             };
             if state.stopped {
                 return;
+            }
+            // A removed home must not reappear when its in-flight read completes.
+            if state.account_homes.get(selected.0) != selected.2.get(selected.0) {
+                continue;
             }
             let spread = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -583,10 +651,9 @@ fn run(
                     entry.restored = false;
                 }
             }
-            state.force.remove(selected.0);
             let copy = saved
                 .is_none_or(|at| at.elapsed() >= restart_copy::SAVE_INTERVAL)
-                .then(|| restart_copy::copy(&state.entries));
+                .then(|| restart_copy::copy(&state.entries, &state.account_homes));
             (state.waker.clone(), copy)
         };
         if let Some(copy) = copy {
@@ -602,6 +669,26 @@ fn run(
 /// How long a window the provider stopped reporting keeps its last reading
 /// (agent-hud-native-open QuotaHistoryStore.retention).
 const WINDOW_RETENTION_MS: i64 = 30 * 86_400_000;
+
+fn cli_sample_age(row: &Value, time_key: &str, now: i64) -> Option<i64> {
+    (row["source"] == "antigravity_cli")
+        .then(|| {
+            row[time_key]
+                .as_str()
+                .and_then(date_ms)
+                .map(|at| now.saturating_sub(at))
+        })
+        .flatten()
+}
+
+fn stale_cli_sample(row: &Value, time_key: &str, now: i64) -> bool {
+    cli_sample_age(row, time_key, now)
+        .is_some_and(|age| age > agents::antigravity::statusline::STALE_AFTER_SECONDS * 1000)
+}
+
+fn expired_cli_sample(row: &Value, time_key: &str, now: i64) -> bool {
+    cli_sample_age(row, time_key, now).is_some_and(|age| age >= WINDOW_RETENTION_MS)
+}
 
 /// An absent reading is not a reset (agent-hud-native-open
 /// RetainedUsageProvider.retainingReadings): a Claude window this reading
@@ -671,7 +758,7 @@ fn due_after(provider: &str, entry: &Entry, state: &Control) -> Duration {
         .iter()
         .filter_map(|source| state.finished.get(*source))
         .any(|at| *at > entry.attempted_ms);
-    let local = sees_local_work(provider);
+    let local = sees_local_work(provider) && !state.account_homes.contains_key(provider);
     let quiet_known_reset = local
         && !entry.failed
         && !resets.is_empty()
@@ -745,8 +832,199 @@ mod tests {
             live: HashSet::new(),
             finished: HashMap::new(),
             entries: BTreeMap::new(),
+            account_homes: HashMap::new(),
             waker: None,
         }
+    }
+
+    #[test]
+    fn callback_samples_age_and_expire_even_when_the_provider_cannot_be_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = AccountService::with_readers(
+            directory.path().into(),
+            directory.path().into(),
+            HashSet::new(),
+            CollectionGate::default(),
+            &[],
+        )
+        .unwrap();
+        let now = chrono::Utc::now();
+        let stale = (now - chrono::Duration::seconds(301)).to_rfc3339();
+        let expired = (now - chrono::Duration::days(31)).to_rfc3339();
+        let mut reading = AccountReading::empty("antigravity");
+        reading.account =
+            Some(json!({"id":"recent","source":"antigravity_cli","checkedAt":stale,"stale":false}));
+        reading.additional_accounts = vec![
+            json!({"id":"expired","source":"antigravity_cli","checkedAt":expired}),
+            json!({"id":"native","checkedAt":expired}),
+        ];
+        reading.quotas = vec![
+            json!({"id":"recent","source":"antigravity_cli","observedAt":stale,"usedPercent":20,"status":"normal"}),
+            json!({"id":"expired","source":"antigravity_cli","observedAt":expired}),
+            json!({"id":"native","observedAt":expired,"status":"normal"}),
+        ];
+        {
+            let mut state = service.shared.state.lock().unwrap();
+            state.enabled.insert("antigravity".into());
+            state.entries.insert(
+                "antigravity",
+                entry(reading, Some(&now.to_rfc3339()), false),
+            );
+        }
+        for failed in [false, true] {
+            service
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .entries
+                .get_mut("antigravity")
+                .unwrap()
+                .failed = failed;
+            let projection = service.projection();
+            assert_eq!(projection.accounts.len(), 2);
+            assert_eq!(projection.quotas.len(), 2);
+            assert_eq!(projection.accounts[0]["stale"], true);
+            assert_eq!(projection.quotas[0]["status"], "stale");
+            assert_eq!(projection.quotas[0]["observedAt"], stale);
+            assert_eq!(projection.quotas[1]["id"], "native");
+        }
+    }
+
+    #[test]
+    fn connected_cli_reports_use_account_cadence_and_callback_requests_respect_spacing() {
+        let mut state = control();
+        let mut reading = AccountReading::empty("antigravity");
+        reading
+            .quotas
+            .push(json!({"resetAt": (chrono::Utc::now()+chrono::Duration::days(7)).to_rfc3339()}));
+        let fresh = entry(reading, Some("2026-10-23T08:00:00Z"), false);
+        assert!(due_after("antigravity", &fresh, &state) > Duration::from_secs(300));
+        state
+            .account_homes
+            .insert("antigravity".into(), vec!["/tmp/config.json".into()]);
+        assert!(due_after("antigravity", &fresh, &state) <= Duration::from_secs(300));
+        state.force.insert("antigravity".into());
+        let pause = due_after("antigravity", &fresh, &state);
+        assert!(pause > Duration::from_secs(59) && pause <= Duration::from_secs(60));
+    }
+
+    #[test]
+    fn a_callback_during_an_account_read_remains_pending_after_that_read_commits() {
+        fn blocked(host: &dyn agents::Host) -> Result<AccountReading, String> {
+            assert_eq!(
+                host.account_homes("antigravity"),
+                [host.home().join("cli/settings.json")],
+            );
+            std::fs::write(host.home().join("read-started"), "")
+                .map_err(|error| error.to_string())?;
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !host.home().join("release-read").exists() {
+                if host.cancelled() || Instant::now() >= deadline {
+                    return Err("fixture read was cancelled or timed out".into());
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Ok(AccountReading::empty("antigravity"))
+        }
+        static READERS: [(&str, Reader); 1] = [("antigravity", blocked)];
+        let directory = tempfile::tempdir().unwrap();
+        let service = AccountService::with_readers(
+            directory.path().into(),
+            directory.path().join("data"),
+            HashSet::new(),
+            CollectionGate::default(),
+            &READERS,
+        )
+        .unwrap();
+        service.update_sources(&json!({
+            "settings":{"antigravityCliSettings":["~/cli/settings.json"]},
+            "providers":[{"id":"antigravity","enabled":true,"detected":false}],
+            "sessions":[],
+        }));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !directory.path().join("read-started").exists() {
+            assert!(
+                Instant::now() < deadline,
+                "the fixture reader did not start"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        service.account_changed("antigravity");
+        std::fs::write(directory.path().join("release-read"), "").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (pending, pause, elapsed, failed) = loop {
+            let state = service.shared.state.lock().unwrap();
+            if let Some(entry) = state.entries.get("antigravity") {
+                break (
+                    state.force.contains("antigravity"),
+                    due_after("antigravity", entry, &state),
+                    entry.attempted.elapsed(),
+                    entry.failed,
+                );
+            }
+            drop(state);
+            assert!(
+                Instant::now() < deadline,
+                "the fixture reading did not commit"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        };
+        service.stop();
+        assert!(
+            !failed,
+            "the controlled account reading completed successfully"
+        );
+        assert!(
+            pending,
+            "a callback received during I/O still needs a new reading"
+        );
+        assert!(pause > Duration::ZERO && pause <= Duration::from_secs(60));
+        assert!(
+            pause >= Duration::from_secs(60).saturating_sub(elapsed),
+            "the pending callback respects the account's 60-second request spacing",
+        );
+    }
+
+    #[test]
+    fn callback_inbox_reaches_only_the_selected_account_context() {
+        let directory = tempfile::tempdir().unwrap();
+        let configuration = directory.path().join("settings.json");
+        std::fs::write(&configuration, "{}").unwrap();
+        let configuration = configuration.canonicalize().unwrap();
+        let data = directory.path().join("data");
+        let args = vec![
+            "fixture".into(),
+            "--antigravity-statusline-hook".into(),
+            data.to_str().unwrap().into(),
+            configuration.to_str().unwrap().into(),
+        ];
+        let mut input = std::io::Cursor::new(br#"{"email":"account@example.com","quota":{"gemini-weekly":{"remaining_fraction":0.4}},"transcript_path":"private"}"#);
+        let mut output = Vec::new();
+        assert_eq!(
+            crate::hooks::handle_with_io(&args, &data, &mut input, &mut output),
+            Some(0)
+        );
+        assert!(output.is_empty());
+        let service = AccountService::with_readers(
+            directory.path().into(),
+            data,
+            HashSet::new(),
+            CollectionGate::default(),
+            &[],
+        )
+        .unwrap();
+        let mut context = service.context.clone();
+        assert!(agents::Host::account_reports(&context, "antigravity").is_empty());
+        context
+            .account_homes
+            .insert("antigravity".into(), vec![configuration]);
+        let reports = agents::Host::account_reports(&context, "antigravity");
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0]["email"], "account@example.com");
+        assert!(!reports[0].to_string().contains("private"));
+        context.account_homes.clear();
+        assert!(agents::Host::account_reports(&context, "antigravity").is_empty());
     }
 
     fn entry(reading: AccountReading, checked_at: Option<&str>, restored: bool) -> Entry {
@@ -760,6 +1038,66 @@ mod tests {
             spread: 0,
             restored,
         }
+    }
+
+    #[test]
+    fn configured_homes_enable_undetected_accounts_and_changes_retire_old_readings() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = AccountService::with_readers(
+            directory.path().into(),
+            directory.path().into(),
+            HashSet::new(),
+            CollectionGate::default(),
+            &[],
+        )
+        .unwrap();
+        let mut snapshot = json!({
+            "settings": {"codexHomes": ["~/work"]},
+            "providers": [{"id":"codex", "enabled":true, "detected":false}],
+            "sessions": [],
+        });
+        service.update_sources(&snapshot);
+        {
+            let mut state = service.shared.state.lock().unwrap();
+            assert!(state.enabled.contains("codex"));
+            assert_eq!(
+                state.account_homes["codex"],
+                vec![directory.path().join("work")]
+            );
+            state
+                .entries
+                .insert("codex", entry(AccountReading::empty("codex"), None, false));
+        }
+        // Routine snapshot updates preserve the cache; edits retire its old homes.
+        service.update_sources(&snapshot);
+        assert!(service
+            .shared
+            .state
+            .lock()
+            .unwrap()
+            .entries
+            .contains_key("codex"));
+        snapshot["settings"]["codexHomes"] = json!([]);
+        service.update_sources(&snapshot);
+        {
+            let state = service.shared.state.lock().unwrap();
+            assert!(!state.entries.contains_key("codex"));
+            assert!(!state.enabled.contains("codex"));
+            assert!(state.account_homes.is_empty());
+        }
+        snapshot["settings"]["codexHomes"] = json!(["~/work"]);
+        snapshot["providers"][0]["enabled"] = json!(false);
+        service.update_sources(&snapshot);
+        assert!(!service
+            .shared
+            .state
+            .lock()
+            .unwrap()
+            .enabled
+            .contains("codex"));
+        assert!(service
+            .validate_account_homes(&json!(["relative"]))
+            .is_err());
     }
 
     #[test]
@@ -778,9 +1116,12 @@ mod tests {
         );
         // A provider that has only failed has nothing to keep.
         entries.insert("third", entry(AccountReading::empty("third"), None, false));
-        restart_copy::save(directory.path(), &restart_copy::copy(&entries));
+        restart_copy::save(
+            directory.path(),
+            &restart_copy::copy(&entries, &HashMap::new()),
+        );
 
-        let restored = restart_copy::load(directory.path(), &FAKE);
+        let restored = restart_copy::load(directory.path(), &FAKE).readings;
         assert_eq!(restored.len(), 1);
         let (reading, checked_at) = &restored[0];
         assert_eq!(reading.provider, "second");
@@ -796,7 +1137,9 @@ mod tests {
             Some("Plan from the last sign-in")
         );
         assert!(
-            restart_copy::load(directory.path(), &FAKE[..1]).is_empty(),
+            restart_copy::load(directory.path(), &FAKE[..1])
+                .readings
+                .is_empty(),
             "providers this build does not read are left out"
         );
 
@@ -806,9 +1149,66 @@ mod tests {
         )
         .unwrap();
         assert!(
-            restart_copy::load(directory.path(), &FAKE).is_empty(),
+            restart_copy::load(directory.path(), &FAKE)
+                .readings
+                .is_empty(),
             "a copy in another format restores nothing"
         );
+    }
+
+    #[test]
+    fn restored_accounts_keep_their_home_scope_and_removed_homes_do_not_return() {
+        fn unread(_: &dyn agents::Host) -> Result<AccountReading, String> {
+            panic!("the collection gate keeps this fixture read-only")
+        }
+        static READERS: [(&str, Reader); 2] = [("codex", unread), ("antigravity", unread)];
+        for (provider, setting) in [
+            ("codex", "codexHomes"),
+            ("antigravity", "antigravityCliSettings"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let homes = HashMap::from([(provider.into(), vec![directory.path().join("work")])]);
+            let entries = BTreeMap::from([(
+                provider,
+                entry(
+                    AccountReading::empty(provider),
+                    Some("2026-10-22T12:00:00Z"),
+                    false,
+                ),
+            )]);
+            for (configured, retained) in [(json!(["~/work"]), true), (json!([]), false)] {
+                restart_copy::save(directory.path(), &restart_copy::copy(&entries, &homes));
+                let gate = CollectionGate::default();
+                let pass = gate.lock().unwrap();
+                let service = AccountService::with_readers(
+                    directory.path().into(),
+                    directory.path().into(),
+                    HashSet::new(),
+                    Arc::clone(&gate),
+                    &READERS,
+                )
+                .unwrap();
+                let mut snapshot = json!({
+                    "settings":{},
+                    "providers":[{"id":provider,"enabled":true,"detected":true}],
+                });
+                snapshot["settings"][setting] = configured;
+                service.update_sources(&snapshot);
+                assert_eq!(
+                    service
+                        .shared
+                        .state
+                        .lock()
+                        .unwrap()
+                        .entries
+                        .contains_key(provider),
+                    retained,
+                    "{provider} must use the restored account's selected source scope",
+                );
+                service.stop();
+                drop(pass);
+            }
+        }
     }
 
     #[test]

@@ -4,6 +4,38 @@
 // recorded in src/fixtures/parity/decisions.json.
 
 export type Language = "en" | "zh";
+export type QuotaDisplay = "consumed" | "remaining";
+
+/** Presentation only: unknown readings stay unknown and source usage stays unchanged. */
+export function quotaPercent(
+  used: number | null | undefined,
+  display: QuotaDisplay = "consumed",
+): number | null {
+  if (used == null || !Number.isFinite(used)) return null;
+  const bounded = Math.max(0, Math.min(100, used));
+  return display === "remaining" ? 100 - bounded : bounded;
+}
+
+export function quotaPercentLabel(
+  used: number | null | undefined,
+  display: QuotaDisplay = "consumed",
+): string {
+  const value = quotaPercent(used, display);
+  return value == null ? "—" : `${Math.round(value)}%`;
+}
+
+export function quotaDisplayLabel(
+  display: QuotaDisplay = "consumed",
+  language: Language = "en",
+): string {
+  return display === "remaining"
+    ? language === "zh"
+      ? "剩余额度"
+      : "Quota remaining"
+    : language === "zh"
+      ? "已用额度"
+      : "Quota used";
+}
 
 const text = (language: Language, zh: string, en: string) =>
   language === "zh" ? zh : en;
@@ -316,6 +348,7 @@ export interface WeekCalendar {
 
 /** What every formatter needs from the host: the interface language and the calendar. */
 export interface FormatSettings {
+  quotaDisplay?: QuotaDisplay;
   language: Language;
   calendar: WeekCalendar;
 }

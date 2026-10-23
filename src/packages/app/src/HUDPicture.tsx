@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Snapshot } from "@agent-hud/protocol";
+import { FormatProvider } from "@agent-hud/ui/format-context";
+import { snapshotLanguage } from "@agent-hud/ui/format";
 import { PanelServicesProvider } from "@agent-hud/hud/PanelContext";
 import { SourceHoverPanel } from "@agent-hud/hud/HoverPanel";
 import { HUDScene, HUDLogo } from "@agent-hud/hud/HUDScene";
@@ -155,7 +157,11 @@ export default function HUDPicture() {
   }
   const metrics =
     config && filtered
-      ? stripMetrics(config, vendorsFromSnapshot(filtered, config.mode))
+      ? stripMetrics(
+          config,
+          vendorsFromSnapshot(filtered, config.mode),
+          filtered.settings.quotaDisplay,
+        )
       : null;
   const width =
     target === "hud"
@@ -212,48 +218,53 @@ export default function HUDPicture() {
   if (!job || !config || !filtered) return null;
   const light = config.appearance === "light";
   return (
-    <PanelServicesProvider value={services}>
-      <div
-        ref={root}
-        style={{
-          position: "relative",
-          width,
-          background: light ? "#f5f5f7" : "#161618",
-          borderRadius: 24,
-          overflow: "hidden",
-          colorScheme: light ? "light" : "dark",
-        }}
-      >
-        {target === "hud" ? (
-          <HUDScene
-            config={config}
-            snapshot={{
-              ...filtered,
-              settings: { ...filtered.settings, animations: false },
-            }}
-            height={(metrics?.height ?? 24) + 70}
-          />
-        ) : (
-          <>
-            <div style={{ position: "relative", padding: 20 }}>
-              <HUDGroundProvider look={config}>
-                <SourceHoverPanel
-                  config={config}
-                  snapshot={filtered}
-                  focusVendor={
-                    job.params.agent
-                      ? vendorKey(job.params.agent.replace(/^api:/, ""))
-                      : undefined
-                  }
-                  light={light}
-                  Logo={HUDLogo}
-                  active={true}
-                />
-              </HUDGroundProvider>
-            </div>
-          </>
-        )}
-      </div>
-    </PanelServicesProvider>
+    <FormatProvider
+      setting={snapshotLanguage(filtered)}
+      quotaDisplay={filtered.settings.quotaDisplay}
+    >
+      <PanelServicesProvider value={services}>
+        <div
+          ref={root}
+          style={{
+            position: "relative",
+            width,
+            background: light ? "#f5f5f7" : "#161618",
+            borderRadius: 24,
+            overflow: "hidden",
+            colorScheme: light ? "light" : "dark",
+          }}
+        >
+          {target === "hud" ? (
+            <HUDScene
+              config={config}
+              snapshot={{
+                ...filtered,
+                settings: { ...filtered.settings, animations: false },
+              }}
+              height={(metrics?.height ?? 24) + 70}
+            />
+          ) : (
+            <>
+              <div style={{ position: "relative", padding: 20 }}>
+                <HUDGroundProvider look={config}>
+                  <SourceHoverPanel
+                    config={config}
+                    snapshot={filtered}
+                    focusVendor={
+                      job.params.agent
+                        ? vendorKey(job.params.agent.replace(/^api:/, ""))
+                        : undefined
+                    }
+                    light={light}
+                    Logo={HUDLogo}
+                    active={true}
+                  />
+                </HUDGroundProvider>
+              </div>
+            </>
+          )}
+        </div>
+      </PanelServicesProvider>
+    </FormatProvider>
   );
 }

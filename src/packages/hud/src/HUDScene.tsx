@@ -349,9 +349,10 @@ export function HUDScene({
     [vendors, detectionPaused],
   );
   const metrics = useMemo(
-    () => stripMetrics(config, vendors),
+    () => stripMetrics(config, vendors, snapshot.settings.quotaDisplay),
     [
       vendors,
+      snapshot.settings.quotaDisplay,
       config.mode,
       config.edge,
       config.logoSize,

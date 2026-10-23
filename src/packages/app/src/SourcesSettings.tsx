@@ -10,6 +10,8 @@ import type {
 import { Button } from "@agent-hud/ui/components/button";
 import { Switch } from "@agent-hud/ui/components/switch";
 import { Input } from "@agent-hud/ui/components/input";
+import CodexAccountHomes from "./settings/CodexAccountHomes";
+import AntigravityAccounts from "./settings/AntigravityAccounts";
 import { HUDArtwork as HUDLogo } from "@agent-hud/hud/HUDArtwork";
 import {
   vendorKey,
@@ -17,7 +19,7 @@ import {
   quotaRowKey,
   quotaRowMatches,
 } from "@agent-hud/hud/model";
-import { snapshotLanguage } from "@agent-hud/ui/format";
+import { snapshotLanguage, quotaPercentLabel } from "@agent-hud/ui/format";
 interface Props {
   snapshot: Snapshot;
   action: (
@@ -255,6 +257,22 @@ export default function SourcesSettings({
               />
             </div>
           </section>
+          {source.id === "codex" && (
+            <CodexAccountHomes
+              homes={snapshot.settings.codexHomes ?? []}
+              zh={zh}
+              onSave={(homes) =>
+                action("set_setting", { key: "codexHomes", value: homes })
+              }
+            />
+          )}
+          {source.id === "antigravity" && (
+            <AntigravityAccounts
+              settings={snapshot.settings.antigravityCliSettings ?? []}
+              zh={zh}
+              action={action}
+            />
+          )}
           <section>
             <h3 style={{ fontSize: 14 }}>
               {t("Expanded panel on this display", "此屏幕的展开面板")}
@@ -409,9 +427,10 @@ export default function SourcesSettings({
                         >
                           <span style={{ flex: 1 }}>{window.name}</span>
                           <span style={{ color: "var(--muted-foreground)" }}>
-                            {window.usedPercent == null
-                              ? "—"
-                              : `${Math.round(window.usedPercent)}%`}
+                            {quotaPercentLabel(
+                              window.usedPercent,
+                              snapshot.settings.quotaDisplay,
+                            )}
                           </span>
                           <Switch
                             checked={
