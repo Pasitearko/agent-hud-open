@@ -1331,15 +1331,21 @@ export function InlineDetail({
         now={now}
         theme={theme}
         live={live}
-        reveal={session.logPath ? reveal : null}
+        // The runtime's open_session goes back to the session where its client
+        // names a place, else shows its log; the label says which.
+        reveal={session.navigationTarget || session.logPath ? reveal : null}
         revealLabel={
-          snapshot.connection.platform === "macos"
+          session.navigationTarget
             ? zh
-              ? "在访达中显示日志"
-              : "Reveal log in Finder"
-            : zh
-              ? "显示日志"
-              : "Reveal log"
+              ? "回到会话"
+              : "Return to session"
+            : snapshot.connection.platform === "macos"
+              ? zh
+                ? "在访达中显示日志"
+                : "Reveal log in Finder"
+              : zh
+                ? "显示日志"
+                : "Reveal log"
         }
       />
       <DetailFigures session={session} detail={detail} theme={theme} />

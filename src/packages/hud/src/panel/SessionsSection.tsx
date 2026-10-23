@@ -158,139 +158,87 @@ export function SourceSessions({
         </span>
       </button>
       {sessions.slice(0, limit).map((session) => (
-        <div key={session.id} style={{ display: "grid", gap: 4 }}>
-          <div
+        // The whole row opens the session's page, as its heading opens the list.
+        <button
+          key={session.id}
+          disabled={!onStats && !listed}
+          title={`${session.title}\n${
+            zh ? "查看会话详情" : "Show session details"
+          }`}
+          onClick={() =>
+            listed
+              ? openSessions(session.id)
+              : services?.selectSession
+                ? services.selectSession(session)
+                : onStats?.()
+          }
+          style={{
+            ...noButtonChrome,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            width: "100%",
+            color: colors.secondary,
+            lineHeight: "15px",
+            minHeight: 15,
+          }}
+        >
+          <span
             style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              color: colors.secondary,
-              lineHeight: "15px",
-              minHeight: 15,
+              position: "relative",
+              width: 14,
+              height: 14,
+              flex: "0 0 14px",
+              opacity: session.state === "idle" ? 0.7 : 1,
             }}
           >
-            <button
-              disabled={!onStats && !listed}
-              title={`${session.title}\n${
-                session.navigationTarget
-                  ? zh
-                    ? "返回会话"
-                    : "Return to session"
-                  : zh
-                    ? "查看会话详情"
-                    : "Show session details"
-              }`}
-              onClick={() => {
-                if (listed) void listed.open(session);
-                else if (session.navigationTarget && services?.openSession) {
-                  void services.openSession(session);
-                } else if (services?.selectSession) {
-                  services.selectSession(session);
-                } else {
-                  onStats?.();
-                }
-              }}
-              style={{
-                ...noButtonChrome,
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                minWidth: 0,
-                flex: 1,
-              }}
-            >
-              <span
-                style={{
-                  position: "relative",
-                  width: 14,
-                  height: 14,
-                  flex: "0 0 14px",
-                  opacity: session.state === "idle" ? 0.7 : 1,
-                }}
-              >
-                {/* The ring round the dot is cut out of the mark, so the ground shows in it. */}
-                <span
-                  style={{
-                    display: "block",
-                    width: 14,
-                    height: 14,
-                    WebkitMaskImage:
-                      "radial-gradient(circle at 13px 13px, transparent 4.5px, #000 5px)",
-                    maskImage:
-                      "radial-gradient(circle at 13px 13px, transparent 4.5px, #000 5px)",
-                  }}
-                >
-                  <Logo source={session.source} size={14} light={light} />
-                </span>
-                <i
-                  style={{
-                    position: "absolute",
-                    right: -2,
-                    bottom: -2,
-                    width: 6,
-                    height: 6,
-                    borderRadius: "50%",
-                    background:
-                      session.state === "waiting"
-                        ? colors.warning
-                        : session.state === "running"
-                          ? "#c084fc"
-                          : colors.tertiary,
-                  }}
-                />
-              </span>
-              <span
-                style={{
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                {sessionTitle(session.title, session.cwd) ||
-                  (zh ? "（未命名会话）" : "(untitled session)")}
-              </span>
-            </button>
-            <button
-              title={
-                zh ? "查看此会话的用量" : "View this session’s token usage"
-              }
-              disabled={!onStats && !listed}
-              onClick={() =>
-                listed
-                  ? openSessions(session.id)
-                  : services?.selectSession
-                    ? services.selectSession(session)
-                    : onStats?.()
-              }
-              style={{
-                ...noButtonChrome,
-                ...tabular,
-                fontSize: 12,
-                whiteSpace: "nowrap",
-              }}
-            >
-              {formatTokens(session.tokens)} tok
-            </button>
-          </div>
-          {listed?.failed === session.id && (
+            {/* The ring round the dot is cut out of the mark, so the ground shows in it. */}
             <span
               style={{
-                fontSize: 11,
-                lineHeight: "14px",
-                color: colors.warningText,
-                paddingLeft: 14,
+                display: "block",
+                width: 14,
+                height: 14,
+                WebkitMaskImage:
+                  "radial-gradient(circle at 13px 13px, transparent 4.5px, #000 5px)",
+                maskImage:
+                  "radial-gradient(circle at 13px 13px, transparent 4.5px, #000 5px)",
               }}
             >
-              {session.navigationTarget
-                ? zh
-                  ? "返回失败，点击标题重试"
-                  : "Couldn't return. Click the title to retry."
-                : zh
-                  ? "无法返回此会话"
-                  : "Session return unavailable"}
+              <Logo source={session.source} size={14} light={light} />
             </span>
-          )}
-        </div>
+            <i
+              style={{
+                position: "absolute",
+                right: -2,
+                bottom: -2,
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background:
+                  session.state === "waiting"
+                    ? colors.warning
+                    : session.state === "running"
+                      ? "#c084fc"
+                      : colors.tertiary,
+              }}
+            />
+          </span>
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {sessionTitle(session.title, session.cwd) ||
+              (zh ? "（未命名会话）" : "(untitled session)")}
+          </span>
+          <span style={{ ...tabular, fontSize: 12, whiteSpace: "nowrap" }}>
+            {formatTokens(session.tokens)} tok
+          </span>
+        </button>
       ))}
       {!sessions.length && (
         <span style={{ color: colors.secondary, lineHeight: "15px" }}>

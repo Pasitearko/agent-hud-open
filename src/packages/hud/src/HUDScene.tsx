@@ -56,7 +56,6 @@ import {
   type ListedSessions,
   type StatsTarget,
 } from "./panel/listed-sessions";
-import type { Session } from "@agent-hud/protocol";
 import { HUDGroundProvider } from "./ground";
 
 export type {
@@ -657,8 +656,7 @@ export function HUDScene({
     ) : null;
 
   // The panel's session rows hand over as Open's ScreenHUD does: the HUD
-  // collapses first, and a return that fails reopens it to say so.
-  const [failedSession, setFailedSession] = useState<string | null>(null);
+  // collapses first, then the Statistics window opens.
   const openStatsAt = useCallback(
     (target: StatsTarget) => {
       if (!onStats) return;
@@ -668,28 +666,8 @@ export function HUDScene({
     [onStats, endHold, handoff],
   );
   const listedSessions = useMemo<ListedSessions>(
-    () => ({
-      failed: failedSession,
-      openStats: openStatsAt,
-      open: async (session: Session) => {
-        const open = panelServices?.openSession;
-        if (!session.navigationTarget || !open) {
-          openStatsAt({ sessionId: session.id });
-          return true;
-        }
-        setFailedSession(null);
-        endHold();
-        handoff();
-        const reached = (await open(session)) !== false;
-        if (!reached) {
-          setFailedSession(session.id);
-          suppressHover.current = false;
-          forceOpen();
-        }
-        return reached;
-      },
-    }),
-    [failedSession, openStatsAt, panelServices, endHold, handoff, forceOpen],
+    () => ({ openStats: openStatsAt }),
+    [openStatsAt],
   );
   // The hidden copy measures the panel for its next opening, as the native
   // hosting view measured its fitting size. A pointer move never draws it
