@@ -123,13 +123,9 @@ pub fn apply_observer_plan(plan: &ObserverPlan) -> Result<bool, String> {
     let temporary = plan
         .path
         .with_extension(format!("{}.tmp", std::process::id()));
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    crate::os::private_file(&mut options);
     use std::io::Write;
     let result = (|| {
-        let mut file = options
-            .open(&temporary)
+        let mut file = crate::os::private_file(&temporary, true)
             .map_err(|_| "Observer temporary file unavailable")?;
         file.write_all(plan.body.as_bytes()).map_err(|_| {
             l10n::text("无法写入观察插件文件", "Observer file could not be written")

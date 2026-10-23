@@ -156,11 +156,8 @@ pub(super) fn save(ctx: &AccountContext, params: &Value) -> Result<Value, String
             .unwrap_or_default()
             .as_nanos()
     ));
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    crate::os::private_file(&mut options);
     let result = (|| -> Result<(), String> {
-        let mut file = options.open(&temporary).map_err(|_| {
+        let mut file = crate::os::private_file(&temporary, true).map_err(|_| {
             l10n::text(
                 "无法创建 API 凭据文件",
                 "Could not create private API credentials",

@@ -1,7 +1,7 @@
 //! WebKitGTK snapshot is scoped to the dedicated anonymous WebView.
 use super::Captured;
 use std::{io::Write, sync::mpsc, time::Duration};
-use webkit2gtk::{prelude::WebViewExt, SnapshotOptions, SnapshotRegion};
+use webkit2gtk::{SnapshotOptions, SnapshotRegion, WebViewExt};
 struct Png(Vec<u8>);
 impl Write for Png {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {

@@ -260,6 +260,31 @@ mod tests {
     }
 
     #[test]
+    fn ancestry_json_strings_preserve_windows_paths_quotes_and_control_characters() {
+        // Execute the probe's own encoder without CIM or another module. The
+        // native ancestry test below covers the complete bounded process read.
+        let script = include_str!("../../../scripts/windows/parent-processes.ps1");
+        let functions = script.split_once("\ntrap {").unwrap().0;
+        let input = "C:\\用户\\my project\\agent.exe \"quoted\"\r\n\t\u{1}";
+        let system = std::env::var_os("SystemRoot").unwrap();
+        let output = Command::new(
+            PathBuf::from(system).join("System32/WindowsPowerShell/v1.0/powershell.exe"),
+        )
+        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"])
+        .arg(format!(
+            "{functions}\n[Console]::Out.WriteLine((Json-String $env:AGENT_HUD_TEST_JSON_STRING))"
+        ))
+        .env("AGENT_HUD_TEST_JSON_STRING", input)
+        .output()
+        .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            serde_json::from_slice::<String>(&output.stdout).unwrap(),
+            input
+        );
+    }
+
+    #[test]
     fn ancestry_reads_the_same_user_parent_in_a_real_windows_process() {
         if std::env::var_os("AGENT_HUD_TEST_ANCESTRY_CHILD").is_some() {
             let parents = parent_processes();

@@ -12,6 +12,14 @@ function Report-Stage([string]$stage) {
         [Console]::Error.Flush()
     }
 }
+# Avoid ConvertTo-Json's first-use module loading inside this bounded probe.
+# These two string fields need only JSON's quote, backslash and control escapes.
+function Json-String([string]$value) {
+    '"' + [regex]::Replace($value, '["\\\x00-\x1f]', {
+        param($match)
+        '\u{0:x4}' -f [int][char]$match.Value
+    }) + '"'
+}
 trap { Report-Stage 'script-error'; exit 1 }
 Report-Stage 'started'
 $owner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -35,7 +43,10 @@ for ($count = 0; $count -lt 16 -and $null -ne $child; $count++) {
     if ($identity.ReturnValue -ne 0 -or $identity.Sid -ne $owner -or
         [string]::IsNullOrEmpty($parent.ExecutablePath) -or
         [string]::IsNullOrEmpty($parent.CommandLine)) { Report-Stage 'owner-or-fields-invalid'; break }
-    @{ executable = $parent.ExecutablePath; command = $parent.CommandLine } | ConvertTo-Json -Compress
+    $record = '{"executable":' + (Json-String $parent.ExecutablePath) +
+        ',"command":' + (Json-String $parent.CommandLine) + '}'
+    [Console]::Out.WriteLine($record)
+    [Console]::Out.Flush()
     Report-Stage 'record-written'
     $child = $parent
 }

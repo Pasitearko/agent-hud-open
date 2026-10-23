@@ -280,6 +280,9 @@ mod tests {
     fn product_tool_changes_open_and_close_the_channel_without_a_snapshot() {
         for failed in [false, true] {
             let temporary = tempfile::tempdir().unwrap();
+            // Let the IPC adapter create its own user-owned directory. An
+            // elevated Windows process's ordinary tempdir can be group-owned.
+            let directory = temporary.path().join("ipc");
             let product = Arc::new(product(false));
             let mut state = ChannelState::Disabled;
             let changed = json!({"enabled":true,"fail":failed});
@@ -289,7 +292,7 @@ mod tests {
                     let status =
                         state.configure(channel_wanted(false, Some(product.as_ref())), || {
                             Server::start(
-                                temporary.path(),
+                                &directory,
                                 Arc::new(move |request, _| {
                                     host_request(
                                         Some(product_handler.as_ref()),
@@ -312,8 +315,7 @@ mod tests {
             }
             // The real temporary IPC channel already answers; no collector
             // pass, clock deadline or client credential is involved.
-            let tools =
-                local_tools::request(temporary.path(), &json!({"method":"host_tools"})).unwrap();
+            let tools = local_tools::request(&directory, &json!({"method":"host_tools"})).unwrap();
             assert_eq!(tools["method"], "host_tools");
             extension_request(
                 Some(product.as_ref()),
@@ -328,9 +330,7 @@ mod tests {
                 },
             )
             .unwrap();
-            assert!(
-                local_tools::request(temporary.path(), &json!({"method":"host_tools"})).is_err()
-            );
+            assert!(local_tools::request(&directory, &json!({"method":"host_tools"})).is_err());
         }
     }
 

@@ -19,7 +19,10 @@ use tokio::{
     sync::watch,
 };
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, GetLastError, LocalFree, ERROR_ALREADY_EXISTS, HANDLE},
+    Foundation::{
+        CloseHandle, GetLastError, LocalFree, ERROR_ALREADY_EXISTS, GENERIC_READ, GENERIC_WRITE,
+        HANDLE, INVALID_HANDLE_VALUE,
+    },
     Security::{
         Authorization::{
             ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
@@ -29,7 +32,11 @@ use windows_sys::Win32::{
         OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, SECURITY_ATTRIBUTES,
         TOKEN_QUERY, TOKEN_USER,
     },
-    Storage::FileSystem::CreateDirectoryW,
+    Storage::FileSystem::{
+        CreateDirectoryW, CreateFileW, CREATE_NEW, FILE_ATTRIBUTE_REPARSE_POINT,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        OPEN_ALWAYS,
+    },
     System::Threading::{GetCurrentProcess, OpenProcessToken},
 };
 fn wide(value: &OsStr) -> Vec<u16> {
@@ -185,6 +192,45 @@ pub(crate) fn private_directory(path: &Path) -> Result<(), String> {
         return Err("The private IPC directory ACL could not be set".into());
     }
     Ok(())
+}
+
+/// A protected file's DACL is inherited, but its owner is not: an elevated
+/// process otherwise creates Administrators-owned files that our reader must
+/// reject. Supply both at creation without taking ownership of existing files.
+pub(crate) fn private_file(path: &Path, create_new: bool) -> io::Result<std::fs::File> {
+    use std::os::windows::{fs::MetadataExt, io::FromRawHandle};
+    let descriptor = security(false).map_err(io::Error::other)?;
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.0,
+        bInheritHandle: 0,
+    };
+    let handle = unsafe {
+        CreateFileW(
+            wide(path.as_os_str()).as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            &attributes,
+            if create_new { CREATE_NEW } else { OPEN_ALWAYS },
+            FILE_FLAG_OPEN_REPARSE_POINT,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    let file = unsafe { std::fs::File::from_raw_handle(handle) };
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || !owned_path(path)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "The private file must be a regular file of the current user",
+        ));
+    }
+    Ok(file)
 }
 pub(crate) fn name(data: &Path, channel: &str) -> Result<String, String> {
     let mut hash = Sha256::new();
@@ -477,6 +523,39 @@ mod tests {
         for directory in [&outer, &inner, &data] {
             assert!(owned_path(directory));
             private_directory(directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn private_files_keep_user_ownership_and_reopening_preserves_contents() {
+        use std::io::Write;
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("private");
+        private_directory(&directory).unwrap();
+        let path = directory.join("account.lock");
+        private_file(&path, true)
+            .unwrap()
+            .write_all(b"preserved")
+            .unwrap();
+        assert!(owned_path(&path));
+        assert!(private_file(&path, false).is_ok());
+        assert_eq!(std::fs::read(&path).unwrap(), b"preserved");
+        assert_eq!(
+            private_file(&path, true).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+
+        // Hosted runners are elevated: files made with default security can
+        // belong to Administrators. Never repair those by taking ownership.
+        let other = temp.path().join("default-owner");
+        std::fs::write(&other, b"untouched").unwrap();
+        if !owned_path(&other) {
+            assert_eq!(
+                private_file(&other, false).unwrap_err().kind(),
+                io::ErrorKind::PermissionDenied
+            );
+            assert!(!owned_path(&other));
+            assert_eq!(std::fs::read(&other).unwrap(), b"untouched");
         }
     }
 

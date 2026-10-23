@@ -61,12 +61,8 @@ pub(super) fn valid(event: &HookEvent, now: i64) -> bool {
 /// and atomic replacement cannot let an older report overwrite a newer one.
 fn account_lock(directory: &Path) -> Result<fs::File, String> {
     let path = directory.join(ACCOUNT_LOCK);
-    let mut options = fs::OpenOptions::new();
-    options.read(true).write(true).create(true).truncate(false);
-    crate::os::private_file(&mut options);
-    let file = options
-        .open(&path)
-        .map_err(|_| "Account inbox lock unavailable")?;
+    let file =
+        crate::os::private_file(&path, false).map_err(|_| "Account inbox lock unavailable")?;
     let metadata = fs::symlink_metadata(&path).map_err(|_| "Account inbox lock unavailable")?;
     if !metadata.is_file() || !crate::os::owned_by_user(&path, &metadata) {
         return Err("Account inbox lock must belong to the current user".into());
@@ -101,11 +97,7 @@ pub fn record_event(data: &Path, event: &HookEvent) -> Result<(), String> {
         SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
     let result: Result<(), String> = (|| {
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        crate::os::private_file(&mut options);
-        let mut file = options
-            .open(&temporary)
+        let mut file = crate::os::private_file(&temporary, true)
             .map_err(|_| "Hook event could not be saved")?;
         file.write_all(&bytes)
             .map_err(|_| "Hook event could not be saved")?;
