@@ -54,6 +54,53 @@ fn installed_follows_claude_codes_record() {
 }
 
 #[test]
+fn installed_from_follows_the_folder_claude_code_added_the_marketplace_from() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config");
+    let ours = temp.path().join("ours");
+    let swift = temp.path().join("swift");
+    fs::create_dir_all(config.join("plugins")).unwrap();
+    fs::create_dir_all(&ours).unwrap();
+    fs::create_dir_all(&swift).unwrap();
+    let markets = config.join("plugins/known_marketplaces.json");
+    let market = |source: Value, location: &Path| {
+        fs::write(
+            &markets,
+            json!({"agent-hud":{"source":source,"installLocation":location}}).to_string(),
+        )
+        .unwrap();
+    };
+    assert_eq!(marketplace_folder(&config), None);
+
+    market(json!({"source":"directory","path":swift}), &swift);
+    assert_eq!(marketplace_folder(&config), Some(swift.clone()));
+    assert!(
+        !installed_from(&config, &swift),
+        "a marketplace alone is no plugin"
+    );
+    fs::write(
+        config.join("plugins/installed_plugins.json"),
+        br#"{"plugins":{"agent-hud@agent-hud":[]}}"#,
+    )
+    .unwrap();
+    assert!(installed_from(&config, &swift));
+    assert!(!installed_from(&config, &ours));
+
+    // No source path: where Claude Code keeps it; the same folder however it is spelt.
+    market(json!({"source":"directory"}), &swift.join("../ours"));
+    assert_eq!(marketplace_folder(&config), Some(swift.join("../ours")));
+    assert!(installed_from(&config, &ours));
+    assert!(!installed_from(&config, &swift));
+
+    // A record it cannot read is another's.
+    fs::write(&markets, b"{").unwrap();
+    assert_eq!(marketplace_folder(&config), None);
+    assert!(!installed_from(&config, &ours));
+    fs::remove_file(&markets).unwrap();
+    assert!(!installed_from(&config, &ours));
+}
+
+#[test]
 fn a_session_runs_the_plugin_while_it_checks_in() {
     let temp = tempfile::tempdir().unwrap();
     let channel = ClaudeChannel::new(temp.path().to_path_buf());

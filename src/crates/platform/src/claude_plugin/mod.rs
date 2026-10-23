@@ -106,6 +106,32 @@ pub fn installed(claude_config: &Path) -> bool {
     listed(claude_config).is_some()
 }
 
+/// The folder Claude Code added the plugin's marketplace from: its source
+/// path, else where it keeps it. None when it has no record of it.
+pub fn marketplace_folder(claude_config: &Path) -> Option<PathBuf> {
+    let bytes = fs::read(claude_config.join("plugins/known_marketplaces.json")).ok()?;
+    let value = serde_json::from_slice::<Value>(&bytes).ok()?;
+    let record = &value["agent-hud"];
+    record["source"]["path"]
+        .as_str()
+        .or(record["installLocation"].as_str())
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Whether Claude Code lists the plugin as installed from `folder`. An
+/// installed plugin without a readable marketplace record is another's,
+/// such as the Swift app's, which talks to that app's channel.
+pub fn installed_from(claude_config: &Path, folder: &Path) -> bool {
+    installed(claude_config)
+        && marketplace_folder(claude_config).is_some_and(|source| {
+            match (fs::canonicalize(&source), fs::canonicalize(folder)) {
+                (Ok(source), Ok(folder)) => source == folder,
+                _ => source == folder,
+            }
+        })
+}
+
 /// When Claude Code last installed or updated the plugin; None when it lists
 /// none, or no time it can read.
 pub fn installed_at(claude_config: &Path) -> Option<SystemTime> {
