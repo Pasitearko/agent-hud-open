@@ -27,7 +27,11 @@ pub const MAX_TURNS: usize = 128;
 /// 7: Claude Code calls keep their thinking tokens as reasoning, count lines
 /// without a message id by request id or offset, and the session's model is
 /// the one with the most output; logs are read once more to recount them.
-pub const PARSER_VERSION: u32 = 7;
+/// 8: a Claude Code turn is named by its prompt id, the id Claude Code's
+/// hooks report, and the request copies it writes are neither prompts nor
+/// messages; logs are read once more so the turn a checkpoint holds takes
+/// that name too.
+pub const PARSER_VERSION: u32 = 8;
 
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;

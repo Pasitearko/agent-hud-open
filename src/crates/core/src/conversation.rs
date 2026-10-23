@@ -22,8 +22,7 @@ impl Context {
             }
         } else if live_facts::claude_prompt(value) {
             if !claude_interrupted(value) {
-                self.turn_id = value["uuid"]
-                    .as_str()
+                self.turn_id = live_facts::claude_turn(value)
                     .or_else(|| value["id"].as_str())
                     .map(str::to_owned);
                 self.started = value
@@ -118,6 +117,9 @@ fn text_value(value: Value) -> Value {
     }
 }
 fn message(value: &Value, offset: u64) -> Vec<Value> {
+    if live_facts::request_copy(value) {
+        return Vec::new();
+    }
     let timestamp = value
         .get("timestamp")
         .or_else(|| value.get("time"))

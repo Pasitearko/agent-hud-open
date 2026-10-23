@@ -990,6 +990,59 @@ mod tests {
     }
 
     #[test]
+    fn a_claude_turn_is_its_prompt_id_and_request_copies_are_skipped() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join(".claude/projects/p");
+        fs::create_dir_all(&root).unwrap();
+        let t = Utc::now().timestamp_millis() - 3_600_000;
+        let id = "11111111-2222-3333-4444-888888888888";
+        // Claude Code 2.1.299+ writes what it sent to the model as
+        // api-request-blob lines: a user copy holds the context and the
+        // prompt again, with no uuid, prompt id or time.
+        let copy = |role: &str, content: Value| json!({"type":"api-request-blob","hash":"h","sessionId":id,"message":{"role":role,"content":content}});
+        fs::write(root.join(format!("{id}.jsonl")), lines(&[
+            json!({"type":"user","sessionId":id,"timestamp":iso(t),"uuid":"line-1","promptId":"prompt-1","message":{"role":"user","content":"Fix the build"}}),
+            copy("user", json!([{"type":"text","text":"<system-reminder>context</system-reminder>"},{"type":"text","text":"Fix the build"}])),
+            json!({"type":"assistant","sessionId":id,"timestamp":iso(t + 1_000),"uuid":"line-2","promptId":"prompt-1","message":{"id":"m1","model":"claude-opus-4-5","role":"assistant","content":[{"type":"text","text":"Looking."}],"usage":{"input_tokens":10,"output_tokens":20}}}),
+            copy("assistant", json!([{"type":"text","text":"Looking."}])),
+            json!({"type":"assistant","sessionId":id,"timestamp":iso(t + 2_000),"uuid":"line-3","promptId":"prompt-1","message":{"id":"m2","model":"claude-opus-4-5","role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"Done."}],"usage":{"input_tokens":10,"output_tokens":20}}}),
+        ])).unwrap();
+        let mut core = core(temp.path());
+        let snapshot = core.request("snapshot", json!({})).unwrap();
+        let session = snapshot["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["id"] == id)
+            .unwrap();
+        assert_eq!(
+            session["liveFacts"]["turnId"], "prompt-1",
+            "the turn has the name Claude Code's hooks report as prompt_id"
+        );
+        let detail = core
+            .request("session_detail", json!({"id": id, "messageTail": true}))
+            .unwrap();
+        let rows = detail["messages"].as_array().unwrap();
+        let said = rows
+            .iter()
+            .map(|row| (row["role"].as_str().unwrap(), row["text"].as_str().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            said,
+            vec![
+                ("user", "Fix the build"),
+                ("assistant", "Looking."),
+                ("assistant", "Done.")
+            ],
+            "a request copy is neither a prompt nor a message: {detail:#}"
+        );
+        assert!(
+            rows.iter().all(|row| row["turnId"] == "prompt-1"),
+            "the copy of the prompt does not end the turn: {detail:#}"
+        );
+    }
+
+    #[test]
     fn a_ledger_written_before_parser_6_gains_marks_and_tools_on_the_read_again() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join(".claude/projects/p");

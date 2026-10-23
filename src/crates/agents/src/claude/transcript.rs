@@ -15,8 +15,31 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// A copy of what Claude Code sent to the model (2.1.299 and later write
+/// `api-request-blob` lines, and `api-request…` lines about them). A copy
+/// repeats the conversation's own lines with no id or time, so it is no
+/// prompt and no message.
+pub fn request_copy(value: &Value) -> bool {
+    value["type"]
+        .as_str()
+        .is_some_and(|kind| kind.starts_with("api-request"))
+}
+
+/// The turn a Claude prompt line starts: the prompt id Claude Code writes on
+/// the line and reports to hooks as `prompt_id`, so a hook's turn and the
+/// log's turn are one; the line's own uuid where no prompt id is written.
+pub fn claude_turn(value: &Value) -> Option<&str> {
+    value["promptId"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .or_else(|| value["uuid"].as_str())
+}
+
 /// The same prompt rule drives source phase and explicit transcript pages.
 pub fn claude_prompt(value: &Value) -> bool {
+    if request_copy(value) {
+        return false;
+    }
     let message = &value["message"];
     let role = message["role"].as_str().or_else(|| value["type"].as_str());
     let content = &message["content"];
@@ -372,8 +395,7 @@ impl LiveLog {
             let id = if interrupted {
                 self.turns.back().and_then(|turn| turn.id.clone())
             } else {
-                value["uuid"]
-                    .as_str()
+                claude_turn(value)
                     .map(str::to_owned)
                     .or_else(|| Some(format!("completed-{at}")))
             };
