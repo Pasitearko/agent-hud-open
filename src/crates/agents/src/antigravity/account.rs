@@ -35,12 +35,14 @@ fn parse(scope: &str, body: &Value) -> Result<Reading, String> {
     } else {
         account_id("antigravity", &[scope])
     };
-    let account_identity = legacy_account(
+    let identified = legacy_account(
         "Antigravity",
         lower_email.as_deref().unwrap_or(""),
         user["teamId"].as_str().unwrap_or(""),
-    )
-    .unwrap_or_else(|| legacy_unresolved("Antigravity", scope));
+    );
+    let account_identity = identified
+        .clone()
+        .unwrap_or_else(|| legacy_unresolved("Antigravity", scope));
     let mut pools = BTreeMap::<String, Value>::new();
     for config in configs {
         let Some(fraction) = config["quotaInfo"]["remainingFraction"]
@@ -92,6 +94,11 @@ fn parse(scope: &str, body: &Value) -> Result<Reading, String> {
         };
         let mut quota = json!({"id":format!("{id}:legacy:{family}"),"vendor":"antigravity","name":name,"shortLabel":short,
             "usedPercent":used,"resetAt":reset,"status":status(used),"account":email,"accountId":account_identity});
+        // The Swift app kept these GetUserStatus pools as `antigravity:legacy:<family>`;
+        // an account it did not name had another home key there.
+        if let Some(account) = &identified {
+            quota["legacyWindowId"] = json!(format!("{account}/antigravity:legacy:{family}"));
+        }
         match family {
             "gemini" => quota["modelFamilies"] = json!(["gemini"]),
             "claude-gpt" => quota["modelFamilies"] = json!(["claude", "gpt"]),
@@ -335,6 +342,17 @@ mod tests {
         let id = account_id("antigravity", &["me@example.com", ""]);
         assert_eq!(gemini["id"], format!("{id}:legacy:gemini"));
         assert_eq!(reading.quotas[0]["modelFamilies"], json!(["claude", "gpt"]));
+        // The Swift app's account for me@example.com, as its quota history keys it.
+        let open = "account:53881ee06d7a6f9562ecf52163857631d9ffdf31717da2d0a7b37b430ff6d1e2";
+        assert_eq!(identity, open);
+        assert_eq!(
+            reading.quotas[0]["legacyWindowId"],
+            format!("{open}/antigravity:legacy:claude-gpt")
+        );
+        assert_eq!(
+            gemini["legacyWindowId"],
+            format!("{open}/antigravity:legacy:gemini")
+        );
         let account = reading.account.unwrap();
         assert_eq!(account["plan"], "Pro");
         assert_eq!(account["identity"], "account");
@@ -351,6 +369,7 @@ mod tests {
             account["id"],
             legacy_unresolved("Antigravity", "/u").as_str()
         );
+        assert!(reading.quotas[0]["legacyWindowId"].is_null());
     }
 
     #[test]

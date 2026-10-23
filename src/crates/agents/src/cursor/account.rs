@@ -205,10 +205,16 @@ pub fn read(host: &dyn Host) -> Result<Reading, String> {
                     "team" => "Pooled",
                     _ => "On-demand",
                 };
+                // The Swift app's window: `cursor` for the included pool, `cursor:<key>` for the rest.
+                let window = match key {
+                    "included" => "cursor".to_owned(),
+                    _ => format!("cursor:{key}"),
+                };
                 let mut quota = json!({
                     "id":format!("{id}:{key}"),"vendor":"cursor","name":name,"shortLabel":short,"usedPercent":used,
                     "resetAt":reset,"status":if used>=90.0 {"critical"}else if used>=70.0 {"warning"}else{"normal"},
-                    "account":email,"accountId":account_identity,"allModels":!matches!(key,"models"|"third-party"),
+                    "account":email,"accountId":account_identity,"legacyWindowId":format!("{account_identity}/{window}"),
+                    "allModels":!matches!(key,"models"|"third-party"),
                 });
                 if let Some(duration) = duration {
                     quota["windowDurationSeconds"] = json!(duration);
@@ -349,6 +355,37 @@ mod tests {
         );
         // The events are unreachable here, so there are no sessions.
         assert!(reading.session_records.is_empty());
+    }
+
+    #[test]
+    fn each_window_keeps_its_open_window_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut body = summary();
+        body["individualUsage"]["overall"] = json!({"used": 5.0, "limit": 10.0});
+        body["individualUsage"]["onDemand"] = json!({"used": 1.0, "limit": 10.0});
+        body["teamUsage"] = json!({"pooled": {"used": 2.0, "limit": 10.0}});
+        let host = signed_in(&dir, &token(3600), &[]).answer(SUMMARY, Ok(body));
+        let reading = read(&host).unwrap();
+        // The Swift app's account for user_123, as its quota history keys it.
+        let account = "account:34591b03e518547be61123ba4f04d8cac609afdd291ac7fcce82555fe7d45729";
+        assert_eq!(reading.account.unwrap()["id"], account);
+        let windows: Vec<_> = reading
+            .quotas
+            .iter()
+            .map(|q| q["legacyWindowId"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            windows,
+            [
+                "cursor",
+                "cursor:models",
+                "cursor:third-party",
+                "cursor:personal",
+                "cursor:team",
+                "cursor:extra"
+            ]
+            .map(|window| format!("{account}/{window}"))
+        );
     }
 
     #[test]

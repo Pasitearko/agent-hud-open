@@ -66,9 +66,14 @@ impl crate::AgentHudCore {
                     .quotas
                     .iter()
                     .filter_map(|row| {
+                        // The Swift app kept Grok Bot's quota under its `grok` provider.
+                        let scope = match row["vendor"].as_str()? {
+                            "grok-bot" => "grok",
+                            vendor => vendor,
+                        };
                         Some((
                             row["id"].as_str()?.into(),
-                            row["vendor"].as_str()?.into(),
+                            scope.into(),
                             row["legacyWindowId"].as_str()?.into(),
                         ))
                     })

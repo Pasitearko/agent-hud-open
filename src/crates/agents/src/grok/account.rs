@@ -64,6 +64,7 @@ pub fn read(host: &dyn Host) -> Result<Reading, String> {
             "Grok Bot personal quota cache is expired or unavailable for this team selection",
         ));
     }
+    // The Swift app's account for this Bot slot; its rows are that app's `grok` windows.
     let id = legacy_unresolved("Grok", &format!("grok-bot:{}", bot::hash(&[&slot])));
     let used = u["percentUsed"]
         .as_f64()
@@ -77,12 +78,12 @@ pub fn read(host: &dyn Host) -> Result<Reading, String> {
         ));
     }
     let trial = u["isSandTrial"] == true;
-    r.quotas.push(json!({"id":format!("{id}/grok"),"vendor":"grok-bot","accountId":id,"name":if trial{"Trial usage limit"}else{"Weekly usage limit"},"shortLabel":if trial{"Trial".to_owned()}else{window_names::Period::Week.short_name()},"usedPercent":used,"resetAt":reset,"windowDurationSeconds":if trial{None}else{Some(604800)},"allModels":true,"observedAt":observed.and_then(iso),"status":used.map(status).unwrap_or("unknown")}));
+    r.quotas.push(json!({"id":format!("{id}/grok"),"vendor":"grok-bot","accountId":id,"legacyWindowId":format!("{id}/grok"),"name":if trial{"Trial usage limit"}else{"Weekly usage limit"},"shortLabel":if trial{"Trial".to_owned()}else{window_names::Period::Week.short_name()},"usedPercent":used,"resetAt":reset,"windowDurationSeconds":if trial{None}else{Some(604800)},"allModels":true,"observedAt":observed.and_then(iso),"status":used.map(status).unwrap_or("unknown")}));
     let cap = u["onDemand"]["limitCents"].as_f64();
     let extra = u["onDemand"]["usedCents"].as_f64();
     if cap.is_some_and(|n| n > 0.) {
         let used = cap.zip(extra).map(|(c, e)| (e / c * 100.).clamp(0., 100.));
-        r.quotas.push(json!({"id":format!("{id}/grok:extra"),"vendor":"grok-bot","accountId":id,"name":"Extra usage","shortLabel":"Extra","usedPercent":used,"resetAt":reset,"allModels":true,"observedAt":observed.and_then(iso),"status":used.map(status).unwrap_or("unknown")}));
+        r.quotas.push(json!({"id":format!("{id}/grok:extra"),"vendor":"grok-bot","accountId":id,"legacyWindowId":format!("{id}/grok:extra"),"name":"Extra usage","shortLabel":"Extra","usedPercent":used,"resetAt":reset,"allModels":true,"observedAt":observed.and_then(iso),"status":used.map(status).unwrap_or("unknown")}));
     }
     r.account = Some(
         json!({"id":id,"provider":"grok-bot","identity":"unresolved","plan":u["grokPlanLabel"],"checkedAt":observed.and_then(iso)}),
@@ -150,6 +151,14 @@ mod tests {
         let id = legacy_unresolved("Grok", &format!("grok-bot:{}", bot::hash(&["slot-1"])));
         assert_eq!(reading.quotas.len(), 2);
         assert_eq!(reading.quotas[0]["id"], format!("{id}/grok"));
+        // The Swift app's account for slot-1, as its quota history keys it.
+        let open = "account:481bd5386e9b3de64d1ae81e84810325bcac7510e46cea250c975c2fa4fb3623";
+        assert_eq!(id, open);
+        assert_eq!(reading.quotas[0]["legacyWindowId"], format!("{open}/grok"));
+        assert_eq!(
+            reading.quotas[1]["legacyWindowId"],
+            format!("{open}/grok:extra")
+        );
         assert_eq!(reading.quotas[0]["usedPercent"], 42.0);
         assert_eq!(reading.quotas[0]["windowDurationSeconds"], 604800);
         assert_eq!(reading.quotas[1]["usedPercent"], 95.0);

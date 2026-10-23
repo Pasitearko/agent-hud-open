@@ -4,6 +4,7 @@ use super::*;
 
 mod claude_desktop;
 mod ingestion;
+mod quota_history;
 mod sessions;
 mod workbuddy;
 
