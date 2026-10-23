@@ -12,7 +12,7 @@
 //! second launch of the same app can ask it to come forward. Only the holder
 //! ever listens there, so two launches never race for the endpoint.
 use std::{
-    fs::{File, OpenOptions, TryLockError},
+    fs::{File, TryLockError},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::Arc,
@@ -155,10 +155,7 @@ pub fn claim(path: &Path, executable: Option<&Path>) -> Claim {
             return Claim::Unavailable(format!("{}: {error}", parent.display()));
         }
     }
-    let mut options = OpenOptions::new();
-    options.read(true).write(true).create(true).truncate(false);
-    crate::os::private_file(&mut options);
-    let mut file = match options.open(path) {
+    let mut file = match crate::os::private_file(path, false) {
         Ok(file) => file,
         Err(error) => return Claim::Unavailable(format!("{}: {error}", path.display())),
     };

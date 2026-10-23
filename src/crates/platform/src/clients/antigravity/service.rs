@@ -147,11 +147,14 @@ mod running {
 
         #[test]
         fn tokenless_cli_fallback_uses_the_executable_not_command_arguments() {
+            let root = tempfile::tempdir().unwrap();
+            let executable = root.path().join("installed/agy");
+            let executable = executable.to_str().unwrap();
             let found = cli_from(vec![
                 process(1, "/bin/sh", "sh /bin/agy"),
-                process(2, "/installed/agy", "agy"),
+                process(2, executable, "agy"),
             ]);
-            assert_eq!(found.as_deref(), Some("/installed/agy"));
+            assert_eq!(found.as_deref(), Some(executable));
             assert!(cli_from(vec![process(1, "agy", "agy")]).is_none());
         }
     }

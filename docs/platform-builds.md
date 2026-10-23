@@ -47,13 +47,16 @@ The installed Tauri CLI reports missing native dependencies. Current prerequisit
 
 The `Windows desktop` workflow (`.github/workflows/windows.yml`) uses an actual
 `windows-latest` runner and the MSVC toolchain. It runs the package checks,
-TypeScript tests, Rust clippy and native Rust tests, then builds an NSIS installer.
+TypeScript and MCP relay tests, Rust clippy and native Rust tests, then builds
+an NSIS installer.
 It runs on pull requests, pushes to `main` and `codex/windows-*`, and manually
 through Actions. No Windows cross-compilation on a Mac is required.
 
 Download `agent-hud-open-windows-x86_64-unsigned` from the successful run's
-**Artifacts** section. The installer includes the engine and MCP relay and installs
-for the current user; its WebView2 bootstrapper downloads the runtime if needed.
+**Artifacts** section. It also contains `provenance.json` identifying the source
+commit and run, plus `SHA256SUMS` for the installer. The installer includes the
+engine and MCP relay and installs for the current user; its WebView2 bootstrapper
+downloads the runtime if needed.
 These are unsigned test artifacts, not a published release. Actions keeps them
 for 14 days. A green build is followed by Windows machine testing; it does not
 qualify desktop focus, display, client, or network behavior.

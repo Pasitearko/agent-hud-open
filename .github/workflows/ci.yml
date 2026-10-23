@@ -19,6 +19,7 @@ jobs:
           node-version: 24
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
+      - uses: oven-sh/setup-bun@v2
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -28,6 +29,7 @@ jobs:
       - run: node src/tooling/check-clients.mjs
       - run: pnpm run typecheck
       - run: pnpm run test:ts
+      - run: pnpm run test:mcp
 
   rust:
     name: Rust (${{ matrix.os }})

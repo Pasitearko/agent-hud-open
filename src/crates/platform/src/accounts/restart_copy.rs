@@ -111,12 +111,11 @@ pub(super) fn save(data_dir: &Path, copy: &Value) {
         fs::create_dir_all(data_dir).map_err(|error| error.to_string())?;
         let bytes = serde_json::to_vec(copy).map_err(|error| error.to_string())?;
         let temporary = data_dir.join(format!(".{FILE}.{}.tmp", std::process::id()));
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
-        crate::os::private_file(&mut options);
-        let written = options
-            .open(&temporary)
-            .and_then(|mut file| file.write_all(&bytes).and_then(|_| file.sync_all()))
+        let written = crate::os::private_file(&temporary, false)
+            .and_then(|mut file| {
+                file.set_len(0)?;
+                file.write_all(&bytes).and_then(|_| file.sync_all())
+            })
             .and_then(|_| fs::rename(&temporary, path(data_dir)));
         if written.is_err() {
             let _ = fs::remove_file(&temporary);

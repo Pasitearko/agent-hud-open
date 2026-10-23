@@ -39,9 +39,21 @@ pub(crate) fn owner_only(path: &Path, metadata: &fs::Metadata) -> bool {
     owned_by_user(path, metadata) && metadata.permissions().mode() & 0o077 == 0
 }
 
-/// New files are 0600 and never follow a symlink.
-pub(crate) fn private_file(options: &mut fs::OpenOptions) {
-    options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+/// Opens a private read/write file without following a symlink. Existing files
+/// are preserved; callers that need exclusive creation pass `create_new`.
+pub(crate) fn private_file(path: &Path, create_new: bool) -> io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW);
+    if create_new {
+        options.create_new(true);
+    } else {
+        options.create(true).truncate(false);
+    }
+    options.open(path)
 }
 
 /// A hook payload from stdin, or Err after five seconds or past `limit` bytes.

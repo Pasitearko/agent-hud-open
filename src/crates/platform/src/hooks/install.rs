@@ -222,10 +222,7 @@ pub(super) fn write_contents(path: &Path, bytes: Option<&[u8]>) -> Result<(), St
         SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
     let result = (|| {
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        crate::os::private_file(&mut options);
-        let mut file = options.open(&temporary).map_err(|_| {
+        let mut file = crate::os::private_file(&temporary, true).map_err(|_| {
             l10n::text(
                 "无法保存客户端的回调设置",
                 "Hook settings could not be saved",

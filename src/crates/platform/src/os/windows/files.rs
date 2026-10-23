@@ -21,8 +21,10 @@ pub(crate) fn owner_only(path: &Path, metadata: &fs::Metadata) -> bool {
     owned_by_user(path, metadata)
 }
 
-/// New files take the protected DACL of their private directory.
-pub(crate) fn private_file(_options: &mut fs::OpenOptions) {}
+/// New files have an explicit current-user owner even in elevated processes.
+pub(crate) fn private_file(path: &Path, create_new: bool) -> io::Result<fs::File> {
+    pipe::private_file(path, create_new)
+}
 
 /// A hook payload from stdin, or Err after five seconds or past `limit` bytes.
 /// Windows console and pipe handles cannot be polled, so a thread reads.

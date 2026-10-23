@@ -1,8 +1,9 @@
 // The relay lists the host's own tools and hands each call to the host with the
 // calling session as its client names it. A stand-in engine plays the app.
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,17 +11,21 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 
 const relay = fileURLToPath(new URL("../src/index.ts", import.meta.url));
-const tsx = fileURLToPath(new URL("../node_modules/.bin/tsx", import.meta.url));
+const tsx = import.meta.resolve("tsx");
 const folder = mkdtempSync(join(tmpdir(), "agent-hud-mcp-"));
+after(() => rmSync(folder, { recursive: true, force: true }));
 
 /** An engine that answers host_tools with `tools` (or fails it) and writes down every request. */
 function engine(name, tools) {
-  const file = join(folder, name);
+  const file = join(
+    folder,
+    `${name}${process.platform === "win32" ? ".exe" : ""}`,
+  );
+  const source = join(folder, `${name}.cjs`);
   const log = `${file}.log`;
   writeFileSync(
-    file,
-    `#!/usr/bin/env node
-const { appendFileSync } = require('node:fs');
+    source,
+    `const { appendFileSync } = require('node:fs');
 require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
   const request = JSON.parse(line);
   appendFileSync(${JSON.stringify(log)}, line + '\\n');
@@ -32,7 +37,14 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
 });
 `,
   );
-  chmodSync(file, 0o755);
+  // The real engine is an executable on every host, including Windows where a
+  // shebang script cannot be spawned as one. Use the packaging toolchain here too.
+  const compiled = spawnSync(
+    process.env.BUN_EXECUTABLE ?? "bun",
+    ["build", "--compile", source, "--outfile", file],
+    { encoding: "utf8" },
+  );
+  assert.equal(compiled.status, 0, compiled.error?.message ?? compiled.stderr);
   return {
     file,
     requests: () =>
@@ -47,8 +59,8 @@ async function connect(engineFile, env = {}) {
   const { CLAUDE_CODE_SESSION_ID: _, ...rest } = process.env;
   await client.connect(
     new StdioClientTransport({
-      command: tsx,
-      args: [relay],
+      command: process.execPath,
+      args: ["--import", tsx, relay],
       env: { ...rest, AGENTHUD_NEXT_ENGINE: engineFile, ...env },
     }),
   );
