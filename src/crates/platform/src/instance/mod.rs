@@ -12,7 +12,7 @@
 //! second launch of the same app can ask it to come forward. Only the holder
 //! ever listens there, so two launches never race for the endpoint.
 use std::{
-    fs::{self, File, OpenOptions, TryLockError},
+    fs::{File, OpenOptions, TryLockError},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::Arc,
@@ -147,8 +147,11 @@ pub fn hand_over(path: &Path) -> bool {
 /// Takes the lock at `path` and writes `executable` into it, so that a launch
 /// it turns away can say which copy runs.
 pub fn claim(path: &Path, executable: Option<&Path>) -> Claim {
-    if let Some(parent) = path.parent() {
-        if let Err(error) = fs::create_dir_all(parent) {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        if let Err(error) = crate::os::private_directory(parent) {
             return Claim::Unavailable(format!("{}: {error}", parent.display()));
         }
     }
@@ -221,37 +224,31 @@ pub fn application(executable: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn a_held_lock_turns_the_next_claim_away_and_names_the_holder() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("app.agenthud/instance.lock");
-        let running = Path::new("/Applications/Agent HUD.app/Contents/MacOS/Agent HUD");
-        let Claim::Acquired(first) = claim(&path, Some(running)) else {
+        let running = temp.path().join("Agent HUD.app/Contents/MacOS/Agent HUD");
+        let next = temp.path().join("other/agent-hud");
+        let Claim::Acquired(first) = claim(&path, Some(&running)) else {
             panic!("the first claim takes the lock");
         };
-        match claim(&path, Some(Path::new("/tmp/agent-hud"))) {
+        match claim(&path, Some(&next)) {
+            Claim::Held(Some(holder)) => assert_eq!(holder, running),
             // Windows keeps a locked file from being read by anyone else.
-            Claim::Held(holder) => {
-                if let Some(holder) = holder {
-                    assert_eq!(holder, running);
-                    assert_eq!(
-                        application(&holder),
-                        Path::new("/Applications/Agent HUD.app")
-                    );
-                }
-            }
+            Claim::Held(None) => {}
             _ => panic!("a second claim is turned away"),
         }
         drop(first);
-        let Claim::Acquired(_second) = claim(&path, Some(Path::new("/usr/local/bin/agent-hud")))
-        else {
+        let Claim::Acquired(second) = claim(&path, Some(&next)) else {
             panic!("the lock is free once its holder lets go");
         };
-        drop(_second);
+        drop(second);
         assert_eq!(
             holder(&path).as_deref(),
-            Some(Path::new("/usr/local/bin/agent-hud")),
+            Some(next.as_path()),
             "the new holder replaces the old name"
         );
     }
@@ -259,11 +256,16 @@ mod tests {
     #[test]
     fn a_second_launch_brings_the_holder_forward() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("instance.lock");
+        let path = temp.path().join("data/instance.lock");
         assert!(!hand_over(&path), "nobody answers before a copy runs");
         let Claim::Acquired(lock) = claim(&path, None) else {
             panic!("the first claim takes the lock");
         };
+        let directory = path.parent().unwrap();
+        assert!(crate::os::owner_only(
+            directory,
+            &fs::metadata(directory).unwrap()
+        ));
         let shown = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count = shown.clone();
         let _running = lock.listen(Arc::new(move || {
@@ -272,6 +274,12 @@ mod tests {
         assert!(hand_over(&path));
         assert!(hand_over(&path));
         assert_eq!(shown.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn an_executable_inside_a_macos_bundle_names_the_application() {
+        let tool = Path::new("Applications/Agent HUD.app/Contents/MacOS/Agent HUD");
+        assert_eq!(application(tool), Path::new("Applications/Agent HUD.app"));
     }
 
     #[test]

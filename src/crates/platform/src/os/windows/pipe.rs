@@ -19,7 +19,7 @@ use tokio::{
     sync::watch,
 };
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, LocalFree, HANDLE},
+    Foundation::{CloseHandle, GetLastError, LocalFree, ERROR_ALREADY_EXISTS, HANDLE},
     Security::{
         Authorization::{
             ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
@@ -29,6 +29,7 @@ use windows_sys::Win32::{
         OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, SECURITY_ATTRIBUTES,
         TOKEN_QUERY, TOKEN_USER,
     },
+    Storage::FileSystem::CreateDirectoryW,
     System::Threading::{GetCurrentProcess, OpenProcessToken},
 };
 fn wide(value: &OsStr) -> Vec<u16> {
@@ -83,7 +84,7 @@ fn security(inherit: bool) -> Result<Local, String> {
     let sid = sid()?;
     let flags = if inherit { "OICI" } else { "" };
     let sddl = wide(OsStr::new(&format!(
-        "D:P(A;{flags};GA;;;{sid})(A;{flags};GA;;;SY)"
+        "O:{sid}D:P(A;{flags};GA;;;{sid})(A;{flags};GA;;;SY)"
     )));
     let mut descriptor = std::ptr::null_mut();
     if unsafe {
@@ -136,7 +137,34 @@ pub(crate) fn owned_path(path: &Path) -> bool {
     sid().is_ok_and(|sid| sid == owner)
 }
 pub(crate) fn private_directory(path: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(path).map_err(|_| "The private IPC directory is unavailable")?;
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        // A later store may protect a missing ancestor too. Give every newly
+        // created directory the user's ownership, leaving existing parents alone.
+        if !parent
+            .try_exists()
+            .map_err(|_| "The private IPC directory is unavailable")?
+        {
+            private_directory(parent)?;
+        }
+    }
+    let descriptor = security(true)?;
+    let wide_path = wide(path.as_os_str());
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.0,
+        bInheritHandle: 0,
+    };
+    // The default owner of an elevated process may be Administrators. Set this
+    // new leaf's owner explicitly at creation; never take ownership of an
+    // existing directory, including one owned by another administrator.
+    if unsafe { CreateDirectoryW(wide_path.as_ptr(), &attributes) } == 0
+        && unsafe { GetLastError() } != ERROR_ALREADY_EXISTS
+    {
+        return Err("The private IPC directory is unavailable".into());
+    }
     let metadata =
         std::fs::symlink_metadata(path).map_err(|_| "The private IPC directory is unavailable")?;
     use std::os::windows::fs::MetadataExt;
@@ -146,11 +174,9 @@ pub(crate) fn private_directory(path: &Path) -> Result<(), String> {
     if !owned_path(path) {
         return Err("The IPC directory must belong to the current user".into());
     }
-    let descriptor = security(true)?;
-    let path = wide(path.as_os_str());
     if unsafe {
         SetFileSecurityW(
-            path.as_ptr(),
+            wide_path.as_ptr(),
             DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
             descriptor.0,
         )
@@ -192,8 +218,8 @@ fn pipe(name: &str, first: bool) -> Result<NamedPipeServer, String> {
     }
     .map_err(|_| "The local named-pipe endpoint is occupied or unavailable".into())
 }
-pub(crate) type Handler = Arc<dyn Fn(Value, &AtomicBool) -> Option<Value> + Send + Sync>;
-pub(crate) struct Server {
+pub type Handler = Arc<dyn Fn(Value, &AtomicBool) -> Option<Value> + Send + Sync>;
+pub struct Server {
     running: Arc<AtomicBool>,
     stop: watch::Sender<bool>,
     thread: Option<JoinHandle<()>>,
@@ -220,23 +246,51 @@ impl Server {
         let running = Arc::new(AtomicBool::new(true));
         let active = running.clone();
         let (stop, mut stopped) = watch::channel(false);
-        let thread=std::thread::Builder::new().name(format!("agenthud-{channel}-pipe")).spawn(move||{
-            runtime.block_on(async move{
-                let mut listener=initial;let mut jobs=tokio::task::JoinSet::new();
-                loop{
-                    let connected=tokio::select!{_ = stopped.changed()=>break,result=listener.connect()=>result};
-                    if connected.is_err()||!active.load(Ordering::Acquire){break;}
-                    while jobs.try_join_next().is_some(){}
-                    if jobs.len()>=63{
-                        let _ = jobs.join_next().await;
-                        while jobs.try_join_next().is_some(){}
+        let thread = std::thread::Builder::new()
+            .name(format!("agenthud-{channel}-pipe"))
+            .spawn(move || {
+                runtime.block_on(async move {
+                    let mut listener = initial;
+                    let mut jobs = tokio::task::JoinSet::new();
+                    loop {
+                        let connected = tokio::select! {
+                            _ = stopped.changed() => break,
+                            result = listener.connect() => result,
+                        };
+                        if connected.is_err() || !active.load(Ordering::Acquire) {
+                            break;
+                        }
+                        while jobs.try_join_next().is_some() {}
+                        if jobs.len() >= 63 {
+                            // Shutdown must also cancel an accept waiting for a
+                            // worker slot, including long-lived approval calls.
+                            tokio::select! {
+                                _ = stopped.changed() => break,
+                                _ = jobs.join_next() => {},
+                            }
+                            while jobs.try_join_next().is_some() {}
+                        }
+                        let next = match pipe(&name, false) {
+                            Ok(next) => next,
+                            Err(_) => break,
+                        };
+                        let stream = std::mem::replace(&mut listener, next);
+                        jobs.spawn(serve(
+                            stream,
+                            request_limit,
+                            response_limit,
+                            handler.clone(),
+                            active.clone(),
+                            stopped.clone(),
+                        ));
                     }
-                    let next=match pipe(&name,false){Ok(next)=>next,Err(_)=>break};let stream=std::mem::replace(&mut listener,next);
-                    jobs.spawn(serve(stream,request_limit,response_limit,handler.clone(),active.clone(),stopped.clone()));
-                }
-                active.store(false,Ordering::Release);jobs.abort_all();while jobs.join_next().await.is_some(){}
-            });runtime.shutdown_timeout(Duration::from_secs(2));
-        }).map_err(|_|"The named-pipe worker could not start")?;
+                    active.store(false, Ordering::Release);
+                    jobs.abort_all();
+                    while jobs.join_next().await.is_some() {}
+                });
+                runtime.shutdown_timeout(Duration::from_secs(2));
+            })
+            .map_err(|_| "The named-pipe worker could not start")?;
         Ok(Self {
             running,
             stop,
@@ -321,23 +375,18 @@ async fn serve(
         }
     }
 }
-pub(crate) fn request(
+pub fn request(
     data: &Path,
     channel: &str,
     message: &Value,
-    limit: usize,
+    request_limit: usize,
+    response_limit: usize,
     timeout: Duration,
     mut settled: impl FnMut() -> bool,
 ) -> Result<Option<Value>, String> {
     let mut bytes = serde_json::to_vec(message).map_err(|_| "Invalid local IPC request")?;
     bytes.push(b'\n');
-    if bytes.len()
-        > if channel == "tools" {
-            crate::local_tools::REQUEST_LIMIT as usize
-        } else {
-            1024 * 1024
-        }
-    {
+    if bytes.len() > request_limit {
         return Err("The local IPC request is too large".into());
     }
     let name = name(data, channel)?;
@@ -346,9 +395,7 @@ pub(crate) fn request(
         .build()
         .map_err(|_| "The local IPC runtime is unavailable")?;
     runtime.block_on(async {
-        let mut stream = ClientOptions::new().open(&name).map_err(|_| {
-            "Agent HUD Next is not listening; enable the requested local service in Settings"
-        })?;
+        let mut stream = connect(&name, timeout.min(Duration::from_secs(2))).await?;
         tokio::time::timeout(Duration::from_secs(2), stream.write_all(&bytes))
             .await
             .map_err(|_| "The local IPC request timed out")?
@@ -374,7 +421,7 @@ pub(crate) fn request(
                 }
                 Ok(Ok(n)) => {
                     response.extend_from_slice(&chunk[..n]);
-                    if response.len() > limit {
+                    if response.len() > response_limit {
                         return Err("The local IPC response is too large".into());
                     }
                     if response.last() == Some(&b'\n') {
@@ -386,4 +433,118 @@ pub(crate) fn request(
             }
         }
     })
+}
+
+/// A connected instance may be busy for the brief interval before the listener
+/// creates its next instance. Retry only that Windows error, within the caller's
+/// deadline; a missing endpoint still fails immediately.
+async fn connect(
+    name: &str,
+    timeout: Duration,
+) -> Result<tokio::net::windows::named_pipe::NamedPipeClient, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match ClientOptions::new().open(name) {
+            Ok(stream) => return Ok(stream),
+            Err(error)
+                if error.raw_os_error()
+                    == Some(windows_sys::Win32::Foundation::ERROR_PIPE_BUSY as i32)
+                    && Instant::now() < deadline =>
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(_) => return Err(
+                "Agent HUD Next is not listening; enable the requested local service in Settings"
+                    .into(),
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn missing_private_directory_ancestors_keep_user_ownership() {
+        let temp = tempfile::tempdir().unwrap();
+        let outer = temp.path().join("outer");
+        let inner = outer.join("inner");
+        let data = inner.join("private");
+        private_directory(&data).unwrap();
+        for directory in [&outer, &inner, &data] {
+            assert!(owned_path(directory));
+            private_directory(directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn private_pipe_round_trip_and_exclusive_owner() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("private");
+        let handler: Handler = Arc::new(|message, _| Some(message));
+        let server = Server::start(&data, "test", 1024, 1024, handler.clone()).unwrap();
+        assert!(server.is_listening());
+        assert!(owned_path(&data));
+        assert!(Server::start(&data, "test", 1024, 1024, handler).is_err());
+        let message = json!({"text": "请求 C:\\my project", "empty": ""});
+        assert_eq!(
+            request(
+                &data,
+                "test",
+                &message,
+                1024,
+                1024,
+                Duration::from_secs(2),
+                || false
+            )
+            .unwrap(),
+            Some(message)
+        );
+    }
+
+    #[test]
+    fn saturated_pipe_shutdown_cancels_waiting_approvals() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("private");
+        let started = Arc::new(AtomicUsize::new(0));
+        let count = started.clone();
+        let handler: Handler = Arc::new(move |_, active| {
+            count.fetch_add(1, Ordering::Release);
+            while active.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            None
+        });
+        let server = Server::start(&data, "saturated", 1024, 1024, handler).unwrap();
+        let name = name(&data, "saturated").unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _clients = runtime.block_on(async {
+            let mut clients = Vec::new();
+            for _ in 0..64 {
+                let mut client = connect(&name, Duration::from_secs(5)).await.unwrap();
+                client.write_all(b"{}\n").await.unwrap();
+                clients.push(client);
+            }
+            clients
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while started.load(Ordering::Acquire) < 63 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(started.load(Ordering::Acquire), 63);
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            drop(server);
+            let _ = sender.send(());
+        });
+        receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("saturated server must stop");
+    }
 }

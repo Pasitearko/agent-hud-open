@@ -2,7 +2,7 @@
 
 Build orchestration lives in `src/tooling/build.mjs`; root package scripts only reference it. Application parsing, deduplication, state, and metering do not belong in build scripts. The tool invokes the existing Cargo/Tauri workspaces and does not alter their configuration or install prerequisites.
 
-Use Node.js 24+, the host Rust toolchain, and the dependencies installed by `pnpm install --frozen-lockfile`. Native desktop dependencies must be installed on the actual target operating system. These entry points deliberately build only for their matching host OS; they are not cross-compilation or release-qualification claims.
+Use Node.js 24+, Bun (to compile the packaged MCP relay), the host Rust toolchain, and the dependencies installed by `pnpm install --frozen-lockfile`. Native desktop dependencies must be installed on the actual target operating system. These entry points deliberately build only for their matching host OS; they are not cross-compilation or release-qualification claims.
 
 ## Commands
 
@@ -38,25 +38,63 @@ The runner checks the Rust compiler's host OS before compiling and rejects a dif
 | Platform | Native build requirements | Current qualification boundary |
 | --- | --- | --- |
 | macOS | Xcode command-line tools/Apple SDK and the native Rust toolchain. Tauri uses the system WebView. | macOS implementation is being checked on real hardware; building alone does not certify window, animation, signing, or updater parity. |
-| Windows | Visual Studio C++ Build Tools with the Windows SDK, a supported Rust toolchain, and WebView2 runtime for execution. | Not validated on a Windows host in this migration. Do not treat a generated command plan as a working Windows build or installer. |
+| Windows | Visual Studio C++ Build Tools with the Windows SDK, a supported Rust toolchain, and WebView2 runtime for execution. | Native compilation and tests run in GitHub Actions; interactive Windows machine acceptance remains separate. A generated command plan is not evidence of a working build or installer. |
 | Linux | The distribution's C/C++/linker tooling and Tauri 2 desktop dependencies, including WebKitGTK 4.1/GTK and required tray/SVG/packaging libraries. Package names vary by distribution. | Not validated on a Linux host. Wayland edge HUD and native Linux drag remain unsupported in the current capability report; a successful build does not remove those limitations. |
 
 The installed Tauri CLI reports missing native dependencies. Current prerequisites are maintained in [Tauri's official platform instructions](https://v2.tauri.app/start/prerequisites/); use the instructions for the actual host rather than attempting to satisfy a Windows/Linux build from macOS.
 
-## Type-checking another host's adapters
+## Windows builds on GitHub
 
-A type check is not a build and proves nothing about behavior, but it catches
-an adapter that no longer matches the shared code. On macOS, the Windows
-adapters type-check with the MinGW cross compiler:
+The `Windows desktop` workflow (`.github/workflows/windows.yml`) uses an actual
+`windows-latest` runner and the MSVC toolchain. It runs the package checks,
+TypeScript tests, Rust clippy and native Rust tests, then builds an NSIS installer.
+It runs on pull requests, pushes to `main` and `codex/windows-*`, and manually
+through Actions. No Windows cross-compilation on a Mac is required.
 
-```sh
-brew install mingw-w64
-rustup target add x86_64-pc-windows-gnu
-cargo check --workspace --tests --target x86_64-pc-windows-gnu
-```
+Download `agent-hud-open-windows-x86_64-unsigned` from the successful run's
+**Artifacts** section. The installer includes the engine and MCP relay and installs
+for the current user; its WebView2 bootstrapper downloads the runtime if needed.
+These are unsigned test artifacts, not a published release. Actions keeps them
+for 14 days. A green build is followed by Windows machine testing; it does not
+qualify desktop focus, display, client, or network behavior.
 
-The Linux adapters need GTK/WebKit development libraries and are checked in
-CI on a Linux runner.
+### Windows machine acceptance
+
+- With only Codex Desktop installed (including Microsoft Store), confirm the enabled
+  Codex source appears in the HUD and its expanded panel before quota data is available.
+  Missing quota displays `--`; a successful account read replaces it with the real value.
+  User-disabled sources and explicitly hidden layout items remain hidden.
+
+- Install, launch, quit and relaunch from a path containing spaces and non-ASCII
+  characters; check a second launch raises the existing app.
+- Read real Claude/Codex logs. In the public `agent-hud-open` app, verify that
+  hook installation remains unavailable and client settings stay unchanged:
+  its default host does not delegate a canonical hook-owner executable.
+- In the private `agent-hud` app installed at its approved Windows path, enable
+  supported client hooks from Settings, then check running/permission/completed
+  states and CLI session attribution. A copied executable or a build output
+  does not qualify as the hook owner.
+- Configure MCP with the copyable PowerShell command, including a client
+  installed through an npm `.cmd` shim; verify requests reach the running app.
+- Try HUD hover, passthrough and dragging with normal and swapped mouse buttons,
+  mixed display scaling, a disconnected/reconnected monitor and tray actions.
+  Save different placements on two displays, restart with their enumeration order
+  changed, and check placements follow each monitor's Windows device path. Mirrored
+  and remote displays without a unique device path retain session-only identity.
+- For the private product, pair over LAN, restart, reconnect, revoke, and confirm
+  the certificate fingerprint survives restart.
+- Check HUD alerts and the current-user login item. With both products installed,
+  verify that enabling or disabling one product's login item leaves the other
+  product's entry unchanged.
+
+Monitor device-path identity and the private product's Remote callback pipe are
+implemented; native keyboard focus handoff and all-virtual-desktop/exclusive-
+fullscreen behavior remain outside the Windows capability set. The private
+product's CloudKit backend remains macOS-only. See its Windows build notes for
+the private installer workflow and remaining remote-control limitations.
+Codex Desktop's shared Windows transport supports private explicit owner RPC;
+the public background Desktop observer and CLI daemon-origin discovery remain
+Unix-only. Real Desktop interoperability still needs Windows acceptance.
 
 ## Shared readers and OS-specific operations
 

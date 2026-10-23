@@ -10,6 +10,8 @@ mod accounts;
 pub mod claude_plugin;
 pub mod clients;
 pub mod hooks;
+#[cfg(windows)]
+pub mod local_ipc;
 pub mod local_tools;
 mod navigation;
 mod os;

@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::{fs, path::Path};
 
 pub fn private_dir(path: &Path) -> Result<()> {
-    fs::create_dir_all(path).map_err(|e| e.to_string())?;
+    crate::os::create_directory(path)?;
     crate::os::protect_directory(path)
 }
 

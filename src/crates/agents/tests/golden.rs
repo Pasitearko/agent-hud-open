@@ -89,7 +89,7 @@ fn unix_file_urls() -> bool {
 
 #[test]
 fn hook_formats_match_the_golden_fixture() {
-    let actual = canonical(&Value::Object(build().into_iter().collect()));
+    let mut actual = canonical(&Value::Object(build().into_iter().collect()));
     assert_eq!(
         actual,
         canonical(&Value::Object(build().into_iter().collect())),
@@ -112,10 +112,12 @@ fn hook_formats_match_the_golden_fixture() {
     });
     let mut expected: Value = serde_json::from_str(&text).unwrap();
     if !unix_file_urls() {
-        expected
-            .as_object_mut()
-            .unwrap()
-            .retain(|name, _| !name.contains("[unix]"));
+        for cases in [&mut expected, &mut actual] {
+            cases
+                .as_object_mut()
+                .unwrap()
+                .retain(|name, _| !name.contains("[unix]"));
+        }
     }
     let (expected, actual) = (expected.as_object().unwrap(), actual.as_object().unwrap());
     let names: BTreeSet<&String> = expected.keys().chain(actual.keys()).collect();

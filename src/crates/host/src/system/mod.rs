@@ -8,6 +8,8 @@ use tauri::Manager;
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(unix)]
+mod unix;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "linux")]
@@ -32,11 +34,31 @@ pub(crate) fn private_output(options: &mut std::fs::OpenOptions) {
     target::private_output(options)
 }
 
-#[derive(Default)]
+/// A command the user can copy into the host's normal interactive shell.
+pub(crate) fn client_command_line(arguments: &[String]) -> String {
+    target::client_command_line(arguments)
+}
+
+/// Client setup runs in the background even when its executable is a console app.
+pub(crate) fn configure_client_command(command: &mut std::process::Command) {
+    target::configure_client_command(command)
+}
+
+pub(crate) fn stop_client(child: &mut std::process::Child) {
+    target::stop_client(child)
+}
+
 pub struct System {
+    identifier: String,
     cached: Mutex<Option<Value>>,
 }
 impl System {
+    pub fn new(identifier: String) -> Self {
+        Self {
+            identifier,
+            cached: Mutex::new(None),
+        }
+    }
     pub fn register_if_never_registered(&self) {
         if target::register_if_never_registered() {
             if let Ok(mut cached) = self.cached.lock() {
@@ -45,7 +67,7 @@ impl System {
         }
     }
     fn refresh(&self) -> Result<Value, String> {
-        let status = target::status()?;
+        let status = target::status(&self.identifier)?;
         *self.cached.lock().map_err(|_| "System state unavailable")? = Some(status.clone());
         Ok(status)
     }
@@ -73,7 +95,7 @@ impl System {
         let enabled = value
             .as_bool()
             .ok_or("The system setting must be a boolean")?;
-        target::set_login(enabled)?;
+        target::set_login(&self.identifier, enabled)?;
         let status = self.refresh()?;
         Ok(Some(status["launchAtLogin"]["enabled"].clone()))
     }

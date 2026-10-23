@@ -23,6 +23,17 @@ fn token(host: &dyn Host) -> Option<String> {
             return Some(s);
         }
     }
+    // On Windows the empty-user credential is a global compatibility slot.
+    // An explicitly selected hosts.yml token must win over another config's
+    // last active keyring login, as it does in GitHub CLI itself.
+    if host.os() == crate::Os::Windows {
+        file_token(host).or_else(|| stored_token(host))
+    } else {
+        stored_token(host).or_else(|| file_token(host))
+    }
+}
+
+fn stored_token(host: &dyn Host) -> Option<String> {
     // gh keeps its token in the system credential store when it can. Where
     // this OS's store is not read yet, hosts.yml is the only place left.
     if let Answer::Found(value) = host.secret(STORED_TOKEN) {
@@ -38,12 +49,25 @@ fn token(host: &dyn Host) -> Option<String> {
             return Some(value);
         }
     }
+    None
+}
+
+fn file_token(host: &dyn Host) -> Option<String> {
     let directory = host
         .env("GH_CONFIG_DIR")
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| {
             host.env("XDG_CONFIG_HOME")
+                .filter(|value| !value.is_empty())
                 .map(|s| PathBuf::from(s).join("gh"))
+        })
+        .or_else(|| match host.os() {
+            crate::Os::Windows => host
+                .env("APPDATA")
+                .filter(|value| !value.is_empty())
+                .map(|s| PathBuf::from(s).join("GitHub CLI")),
+            _ => None,
         })
         .unwrap_or_else(|| host.home().join(".config/gh"));
     const LIMIT: u64 = 1024 * 1024;
@@ -282,6 +306,49 @@ mod tests {
         host.secrets
             .insert(STORED_TOKEN.into(), Answer::Unsupported);
         assert_eq!(token(&host).as_deref(), Some("t"));
+    }
+
+    #[test]
+    fn windows_gh_config_uses_appdata_after_explicit_overrides() {
+        let yml = |token: &str| format!("github.com:\n  oauth_token: {token}\n");
+        let mut host = FakeHost::new("/home/u")
+            .env("APPDATA", "/roaming")
+            .env("GH_CONFIG_DIR", "")
+            .env("XDG_CONFIG_HOME", "")
+            .file("/roaming/GitHub CLI/hosts.yml", &yml("roaming"))
+            .file("/xdg/gh/hosts.yml", &yml("xdg"))
+            .file("/custom/hosts.yml", &yml("custom"))
+            .file("/home/u/.config/gh/hosts.yml", &yml("home"));
+        host.os = crate::Os::Windows;
+        assert_eq!(token(&host).as_deref(), Some("roaming"));
+        host.env.insert("XDG_CONFIG_HOME".into(), "/xdg".into());
+        assert_eq!(token(&host).as_deref(), Some("xdg"));
+        host.env.insert("GH_CONFIG_DIR".into(), "/custom".into());
+        assert_eq!(token(&host).as_deref(), Some("custom"));
+        host.env.remove("GH_CONFIG_DIR");
+        host.env.remove("XDG_CONFIG_HOME");
+        host.os = crate::Os::MacOs;
+        assert_eq!(token(&host).as_deref(), Some("home"));
+    }
+
+    #[test]
+    fn windows_selected_config_token_precedes_the_global_keyring_slot() {
+        let mut host = FakeHost::new("/home/u")
+            .env("GH_CONFIG_DIR", "/selected")
+            .file(
+                "/selected/hosts.yml",
+                "github.com:\n  oauth_token: selected-account\n",
+            );
+        host.os = crate::Os::Windows;
+        host.secrets
+            .insert(STORED_TOKEN.into(), Answer::Found("global-account".into()));
+        assert_eq!(token(&host).as_deref(), Some("selected-account"));
+        host.env
+            .insert("GH_TOKEN".into(), "environment-account".into());
+        assert_eq!(token(&host).as_deref(), Some("environment-account"));
+        host.env.remove("GH_TOKEN");
+        host.files.clear();
+        assert_eq!(token(&host).as_deref(), Some("global-account"));
     }
 
     #[test]

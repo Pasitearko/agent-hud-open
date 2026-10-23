@@ -105,10 +105,31 @@ export const SourceHoverPanel = memo(function SourceHoverPanel({
   }, [rows]);
   const vendorNames = useMemo(
     () =>
-      [...new Set(rows.map((row) => row.vendor))].filter(
-        (vendor) => !config.panelLayout.blocks?.[vendor]?.hidden,
-      ),
-    [rows, config.panelLayout],
+      [
+        ...new Set([
+          ...rows.map((row) => row.vendor),
+          ...snapshot.providers
+            .filter(
+              (provider) =>
+                provider.detected &&
+                provider.enabled &&
+                (!focusVendor ||
+                  vendorKey(provider.id) === vendorKey(focusVendor)) &&
+                !snapshot.billing.some(
+                  (account) =>
+                    vendorKey(account.vendor) === vendorKey(provider.id),
+                ),
+            )
+            .map((provider) => provider.id),
+        ]),
+      ].filter((vendor) => !config.panelLayout.blocks?.[vendor]?.hidden),
+    [
+      rows,
+      snapshot.providers,
+      snapshot.billing,
+      focusVendor,
+      config.panelLayout,
+    ],
   );
   const billing = snapshot.billing.filter(
     (account) =>

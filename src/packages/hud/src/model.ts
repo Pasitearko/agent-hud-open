@@ -189,7 +189,7 @@ export function quotaShortName(quota: {
 
 export function meterLabel(vendor: HUDVendor): string {
   return vendor.used == null
-    ? (vendor.balance ?? "–")
+    ? (vendor.balance ?? "--")
     : `${Math.round(vendor.used)}%`;
 }
 

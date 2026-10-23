@@ -107,9 +107,6 @@ fn args(client: &str, install: bool, path: &std::path::Path) -> Vec<String> {
     }
     args
 }
-fn quoted(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
 fn status(app: &tauri::AppHandle) -> Result<Value, String> {
     let home = home()?;
     let options = app.state::<super::HostOptions>();
@@ -118,7 +115,7 @@ fn status(app: &tauri::AppHandle) -> Result<Value, String> {
         && super::cli::resource("agent-hud-mcp").is_some()
         && super::cli::resource("agent-hud-engine").is_some();
     Ok(
-        json!({"ready":ready,"notice":if ready{None}else{Some("MCP setup requires the fixed installed app and its packaged relay")},"json":path.map(|path|json!({"mcpServers":{"agent-hud":{"command":path,"args":["--mcp"]}}})),"clients":(["claudeCode","codex"].map(|client|json!({"id":client,"name":if client=="claudeCode"{"Claude Code"}else{"Codex"},"available":executable(client,&home).is_some(),"installed":installed(client,&home),"command":path.map(|p|std::iter::once(client_command(client).unwrap().into()).chain(args(client,true,p)).map(|s|quoted(&s)).collect::<Vec<_>>().join(" "))}))) }),
+        json!({"ready":ready,"notice":if ready{None}else{Some("MCP setup requires the fixed installed app and its packaged relay")},"json":path.map(|path|json!({"mcpServers":{"agent-hud":{"command":path,"args":["--mcp"]}}})),"clients":(["claudeCode","codex"].map(|client|json!({"id":client,"name":if client=="claudeCode"{"Claude Code"}else{"Codex"},"available":executable(client,&home).is_some(),"installed":installed(client,&home),"command":path.map(|p|super::system::client_command_line(&std::iter::once(client_command(client).unwrap().into()).chain(args(client,true,p)).collect::<Vec<_>>()))}))) }),
     )
 }
 fn run(app: &tauri::AppHandle, client: &str, install: bool) -> Result<Value, String> {
@@ -164,6 +161,7 @@ pub(crate) fn run_client(
     let output = options.open(&output_path).map_err(|e| e.to_string())?;
     let result = (|| {
         let mut command = Command::new(executable);
+        super::system::configure_client_command(&mut command);
         command
             .args(arguments)
             .current_dir(home)
@@ -180,8 +178,7 @@ pub(crate) fn run_client(
                 break status;
             }
             if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
+                super::system::stop_client(&mut child);
                 return Err(format!(
                     "The client did not finish within {} seconds",
                     timeout.as_secs()

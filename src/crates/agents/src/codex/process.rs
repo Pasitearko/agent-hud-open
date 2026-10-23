@@ -79,7 +79,7 @@ pub fn invocation(arguments: &[String]) -> &'static str {
 pub fn origin(caller: &Caller, session: &str) -> Origin {
     let mut host = "unsupported";
     if let Some(process) = caller.ancestors.first() {
-        if process.executable.file_name().and_then(|s| s.to_str()) == Some(PROGRAM) {
+        if crate::process::native_program(&process.executable, PROGRAM) {
             host = invocation(&process.arguments);
             if host == "desktop" {
                 host = if caller
@@ -158,5 +158,20 @@ mod tests {
         assert_eq!((daemon.host, daemon.ask_channel), ("daemon", true));
         let cli = origin_of(&["codex"], None);
         assert_eq!((cli.host, cli.interactive), ("cli", true));
+    }
+
+    #[test]
+    fn windows_native_cli_has_a_verified_origin() {
+        let ancestors = [Ancestor {
+            executable: r"C:\Users\me\.local\bin\codex.exe".into(),
+            arguments: vec!["codex.exe".into(), "--full-auto".into()],
+            ..Ancestor::default()
+        }];
+        let caller = Caller {
+            ancestors: &ancestors,
+            env: &HashMap::new(),
+            installed: &|_| false,
+        };
+        assert_eq!(origin(&caller, "thread-1").host, "cli");
     }
 }

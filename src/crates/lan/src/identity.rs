@@ -1,5 +1,5 @@
-//! The production Apple identity signs TLS in Keychain. The private key is never
-//! exported to a PEM file or copied into Rustls; only its public certificate is.
+//! Native key stores sign TLS without exporting the private key. Only the
+//! public certificate is copied into Rustls.
 use super::*;
 use std::{path::Path, sync::Arc};
 #[derive(Clone)]
@@ -39,7 +39,10 @@ impl Identity {
     }
 }
 
-// Where the TLS identity's private key lives. Only macOS has an adapter.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod certificate;
+
+// Where the TLS identity's private key lives.
 #[cfg(target_os = "macos")]
 #[path = "identity/macos.rs"]
 mod host;

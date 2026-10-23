@@ -68,10 +68,12 @@ stubs are the list of open work for that operating system.
 | --- | --- | --- | --- |
 | Paths, discovery, processes, files, secrets, app activation | `crates/platform/src/os/mod.rs` | `os/macos/`, `os/windows/`, `os/linux/`; `os/unix/` is shared by macOS and Linux | `home_dir`, `data_dir`, `caches_dir`, `source_roots`, `engine_candidates`, `processes`, `listening_ports`, `parent_processes`, `codex_cli_on_port`, `private_directory`, `owned_by_user`, `owner_only`, `private_file`, `read_stdin`, `hook_configuration`, `stored_secret`, `app_running`, `activate_app`, `OS` (whose facts the agents' descriptors give), `folder` and `locate` (an agent's per-OS location), capability constants |
 | Hook callback channel | `crates/platform/src/hooks/mod.rs` | `hooks/unix.rs`, `hooks/windows.rs` | `Server`, `send` |
-| Codex Desktop IPC | `crates/platform/src/clients/codex/mod.rs` | `desktop.rs` (Unix socket), `desktop_windows.rs` (stub) | `CodexDesktopObserver`, `daemon_tui_origin` |
+| Shared Windows callback transport | `crates/platform/src/lib.rs` | `local_ipc.rs` facade over `os/windows/pipe.rs` | `Server`, `Handler`, `request` with caller-owned request/reply limits; bounded `read_stdin` |
+| Codex Desktop IPC | `crates/platform/src/clients/codex/mod.rs`, `desktop_io.rs` | `desktop_io/unix.rs` (same-user socket), `desktop_io/windows.rs` (same-user named pipe); Windows observer stays in `desktop_windows.rs` | Shared `DesktopIpc` framing and owner RPC transport; `CodexDesktopObserver`, `daemon_tui_origin` are Unix-only |
 | Local MCP channel | `crates/platform/src/local_tools/mod.rs` | `local_tools/unix.rs`, `local_tools/windows.rs` | `Server`, `request` |
 | One running copy | `crates/platform/src/instance/mod.rs` (the lock itself is portable) | `instance/unix.rs` (socket beside the lock), `instance/windows.rs` (named pipe) | `Endpoint`, `listen`, `hand_over` |
 | LAN listener and files | `crates/lan/src/os/mod.rs` | `os/unix.rs`, `os/windows.rs` | `wake_pair`, `wait`, `addresses`, `protect_directory`, `private_file` |
+| LAN credential store | `crates/lan/src/credentials.rs` | `credentials/keychain_macos.rs`, `credentials/credential_windows.rs` | `SecretStore`: login Keychain / current-user Windows Credential Manager |
 | LAN TLS identity | `crates/lan/src/identity.rs` | `identity/macos.rs`, `identity/windows.rs`, `identity/linux.rs` | `load` |
 | HUD windows | `crates/host/src/hud/mod.rs` | `hud/macos.rs`, `hud/windows.rs`, `hud/linux.rs`; `hud/generic.rs` holds Tauri-only pieces a host may re-export | listed at the selector |
 | App shell | `crates/host/src/shell/mod.rs` | `shell/macos.rs`, `shell/windows.rs`, `shell/linux.rs` | `install`, `window_opened`, `windows_changed`, `reopened`, `statistics_chrome`, `system_prefers_chinese`, `alert` (Linux prints to standard error until a dialog exists before Tauri starts) |
@@ -136,3 +138,10 @@ ports; they are not proof of Windows/Linux builds, account coverage, focus,
 mixed-DPI behavior or installer readiness. Each platform must build on its own
 runner and verify its actual clients, credentials, files, process cancellation,
 multi-window behavior and normal/rewrite/truncate log ingestion.
+
+Windows LAN uses a non-exportable P-256 CNG key and the same certificate format
+as macOS. Only the certificate is written to the protected local data directory;
+TLS signatures stay in CNG. Adapter enumeration supplies active IPv4 endpoints,
+and grants/tokens use a current-user DACL and Windows Credential Manager.
+Windows-native persistence, ACL, pipe and process checks run in GitHub Actions;
+LAN pairing and firewall reachability still need real-machine acceptance.

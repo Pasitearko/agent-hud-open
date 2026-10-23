@@ -30,6 +30,7 @@ export function parseOptions(args, host = process.platform) {
   };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
+    if (arg === "--") continue;
     if (arg === "--platform" || arg === "--component") {
       const value = args[++i];
       if (!value || value.startsWith("--"))

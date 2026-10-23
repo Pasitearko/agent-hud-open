@@ -511,3 +511,40 @@ fn from_is_a_whole_proposal_of_a_version() {
         json!({"blocks": {"claude": {"widget": "number"}}})
     );
 }
+
+#[test]
+fn detected_clients_without_readings_have_configurable_empty_blocks() {
+    let (_folder, owner) = owner();
+    let snapshot = json!({
+        "providers": [
+            {"id":"codex", "enabled":true, "detected":true},
+            {"id":"deepseek", "enabled":true, "detected":true},
+            {"id":"kimi", "enabled":false, "detected":true},
+            {"id":"cursor", "enabled":true, "detected":false}
+        ],
+        "quotas": [],
+        "sessions": [],
+        "billing": [{"id":"balance", "vendor":"deepseek", "amount":8.85, "currency":"CNY"}]
+    });
+    let read = owner
+        .tool("get_hud", json!({"screen":"main"}), &snapshot, None)
+        .unwrap();
+    let blocks = read["blocks"].as_array().unwrap();
+    assert_eq!(
+        blocks
+            .iter()
+            .map(|block| block["key"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["codex", "api:deepseek"]
+    );
+    assert_eq!(blocks[0]["rows"], json!([]));
+    assert_eq!(blocks[0]["accounts"], json!([]));
+    let proposed = owner.tool(
+        "draft_hud",
+        json!({"screen":"main", "hud":{"agents":["codex"]}, "blocks":{"codex":{"hidden":true}}}),
+        &snapshot,
+        None,
+    ).unwrap();
+    assert_eq!(proposed["layout"]["blocks"]["codex"]["hidden"], true);
+    assert_eq!(proposed["blocks"][0]["hidden"], true);
+}

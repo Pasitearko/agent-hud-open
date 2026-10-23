@@ -76,3 +76,33 @@ pub type OriginRule = fn(&Caller, &str) -> Origin;
 /// A client's rule for whether a hook comes from a run nobody watches, whose
 /// requests stay with the client.
 pub type UnattendedRule = fn(&Caller) -> bool;
+
+/// A native executable name. Windows paths may also appear in imported facts
+/// on another host, so recognize both separators and the native `.exe` suffix.
+pub(crate) fn native_program(path: &Path, name: &str) -> bool {
+    let Some(path) = path.to_str() else {
+        return false;
+    };
+    let file = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    file == name
+        || file.rsplit_once('.').is_some_and(|(stem, extension)| {
+            extension.eq_ignore_ascii_case("exe") && stem.eq_ignore_ascii_case(name)
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_names_cover_windows_without_matching_wrappers() {
+        assert!(native_program(Path::new("/usr/local/bin/codex"), "codex"));
+        assert!(native_program(
+            Path::new(r"C:\Program Files\Codex\CODEX.EXE"),
+            "codex"
+        ));
+        assert!(!native_program(Path::new(r"C:\bin\codex.cmd"), "codex"));
+        assert!(!native_program(Path::new("/bin/not-codex"), "codex"));
+        assert!(!native_program(Path::new("/bin/CODEX"), "codex"));
+    }
+}

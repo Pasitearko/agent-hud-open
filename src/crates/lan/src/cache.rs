@@ -405,7 +405,7 @@ mod tests {
     #[test]
     fn a_version_carries_only_its_changes_and_the_revision_of_the_whole() {
         let folder = std::env::temp_dir().join(format!("lan-cache-{}", std::process::id()));
-        std::fs::create_dir_all(&folder).unwrap();
+        crate::fs::private_dir(&folder).unwrap();
         let mut cache =
             SnapshotCache::<Item>::new("mac".into(), "Mac".into(), folder.join("cursor.json"))
                 .unwrap();

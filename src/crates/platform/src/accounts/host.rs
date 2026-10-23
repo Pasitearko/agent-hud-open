@@ -43,7 +43,7 @@ impl Host for AccountContext {
         crate::os::folder(&self.home, &self.env, base)
     }
     fn env(&self, name: &str) -> Option<&str> {
-        self.env.get(name).map(String::as_str)
+        crate::os::environment_value(&self.env, name)
     }
     fn read_file(&self, path: &Path, limit: u64) -> Answer<Vec<u8>> {
         let mut bytes = Vec::new();

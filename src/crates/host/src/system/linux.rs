@@ -1,3 +1,4 @@
+pub(super) use super::unix::{client_command_line, configure_client_command, stop_client};
 use serde_json::{json, Value};
 use std::path::Path;
 use std::{fs, path::PathBuf};
@@ -15,12 +16,12 @@ fn enabled() -> bool {
         .and_then(|p| fs::read_to_string(p).ok())
         .is_some_and(|s| s.starts_with(MARKER) && !s.lines().any(|l| l == "Hidden=true"))
 }
-pub(super) fn status() -> Result<Value, String> {
+pub(super) fn status(_identifier: &str) -> Result<Value, String> {
     Ok(
         json!({"platform":"linux","launchAtLogin":{"supported":path().is_ok(),"enabled":enabled(),"status":if enabled(){"enabled"}else{"disabled"},"notice":"Uses the desktop's XDG autostart directory; runtime validation is pending."}}),
     )
 }
-pub(super) fn set_login(value: bool) -> Result<(), String> {
+pub(super) fn set_login(_identifier: &str, value: bool) -> Result<(), String> {
     let path = path()?;
     if let Ok(existing) = fs::read_to_string(&path) {
         if !existing.starts_with(MARKER) {

@@ -19,7 +19,7 @@ fn arguments(caller: &Caller) -> Option<Vec<String>> {
     if (caller.installed)(path) || process.bundle.as_deref() == Some(CODE_BUNDLE) {
         return Some(process.arguments.clone());
     }
-    if path.file_name().and_then(|s| s.to_str()) == Some("node")
+    if crate::process::native_program(path, "node")
         && process
             .arguments
             .get(1)
@@ -250,6 +250,34 @@ mod tests {
             installed: &|_: &Path| false,
         };
         assert_eq!(origin(&caller, "s"), Origin::unsupported());
+    }
+
+    #[test]
+    fn windows_node_uses_the_installed_script_identity() {
+        let script = Path::new(r"C:\Users\me\AppData\Roaming\npm\claude.js");
+        let ancestors = [Ancestor {
+            executable: r"C:\Program Files\nodejs\node.exe".into(),
+            resolved: Some(r"C:\Program Files\nodejs\node.exe".into()),
+            arguments: vec![
+                "node.exe".into(),
+                script.to_str().unwrap().into(),
+                "-p".into(),
+                "hello".into(),
+            ],
+            bundle: None,
+        }];
+        let env = HashMap::from([
+            ("CLAUDE_CODE_ENTRYPOINT".into(), "cli".into()),
+            ("CLAUDE_CODE_SESSION_ATTENDED".into(), "0".into()),
+        ]);
+        let caller = Caller {
+            ancestors: &ancestors,
+            env: &env,
+            installed: &|path| path == script,
+        };
+        assert_eq!(origin(&caller, "s").host, "cli");
+        assert!(!origin(&caller, "s").interactive);
+        assert!(unattended(&caller));
     }
 
     #[test]

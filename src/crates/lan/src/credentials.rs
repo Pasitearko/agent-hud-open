@@ -221,7 +221,7 @@ mod tests {
     #[test]
     fn saved_revocation_and_known_empty_array_remain_readable() {
         let directory = std::env::temp_dir().join(format!("lan-grants-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&directory).unwrap();
+        crate::fs::private_dir(&directory).unwrap();
         let file = directory.join("clients.json");
         std::fs::write(&file, br#"{"paired-client":"credential-digest"}"#).unwrap();
         let grants = Credentials::new("fixture", directory.clone(), Arc::new(NoSecrets)).unwrap();
@@ -254,10 +254,14 @@ mod tests {
     }
 }
 
-// The secret store for grants. macOS keeps them in the Keychain; other hosts
-// need their own `SecretStore` before LAN pairing can persist there.
+// Each host supplies its own persistent user secret store.
 #[cfg(target_os = "macos")]
 #[path = "credentials/keychain_macos.rs"]
 mod keychain;
 #[cfg(target_os = "macos")]
 pub use keychain::KeychainSecrets;
+#[cfg(target_os = "windows")]
+#[path = "credentials/credential_windows.rs"]
+mod credential;
+#[cfg(target_os = "windows")]
+pub use credential::WindowsSecrets;

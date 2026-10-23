@@ -230,7 +230,7 @@ mod tests {
         }
     }
 
-    fn resolve(location: &Location, env: &[(&str, &str)], present: &[&str]) -> Vec<String> {
+    fn resolve(location: &Location, env: &[(&str, &str)], present: &[&str]) -> Vec<PathBuf> {
         let env: HashMap<String, String> = env
             .iter()
             .map(|(k, v)| ((*k).into(), (*v).into()))
@@ -238,20 +238,19 @@ mod tests {
         let disk = Disk {
             present: present.iter().map(PathBuf::from).collect(),
         };
-        location
-            .resolve(Path::new("/h"), &|key| env.get(key).cloned(), &disk)
-            .into_iter()
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect()
+        location.resolve(Path::new("/h"), &|key| env.get(key).cloned(), &disk)
     }
 
     #[test]
     fn the_first_set_variable_names_the_folder() {
         let qwen = Location::home(&["QWEN_RUNTIME_DIR", "QWEN_HOME"], &[".qwen"], "projects");
-        assert_eq!(resolve(&qwen, &[], &[]), ["/h/.qwen/projects"]);
+        assert_eq!(
+            resolve(&qwen, &[], &[]),
+            [PathBuf::from("/h/.qwen/projects")]
+        );
         assert_eq!(
             resolve(&qwen, &[("QWEN_HOME", " /q ")], &[]),
-            ["/q/projects"]
+            [PathBuf::from("/q/projects")]
         );
         assert_eq!(
             resolve(
@@ -259,11 +258,11 @@ mod tests {
                 &[("QWEN_RUNTIME_DIR", "/r"), ("QWEN_HOME", "/q")],
                 &[]
             ),
-            ["/r/projects"]
+            [PathBuf::from("/r/projects")]
         );
         assert_eq!(
             resolve(&qwen, &[("QWEN_RUNTIME_DIR", " ")], &[]),
-            ["/h/.qwen/projects"]
+            [PathBuf::from("/h/.qwen/projects")]
         );
     }
 
@@ -279,11 +278,11 @@ mod tests {
                 &[("CODEBUDDY_CONFIG_DIR", "/h/.workbuddy")],
                 &[]
             ),
-            ["/h/.codebuddy/projects"]
+            [PathBuf::from("/h/.codebuddy/projects")]
         );
         assert_eq!(
             resolve(&codebuddy, &[("CODEBUDDY_CONFIG_DIR", "/c")], &[]),
-            ["/c/projects"]
+            [PathBuf::from("/c/projects")]
         );
     }
 
@@ -293,7 +292,7 @@ mod tests {
         assert!(resolve(&claude, &[], &[]).is_empty());
         assert_eq!(
             resolve(&claude, &[("CLAUDE_CONFIG_DIR", "/c")], &[]),
-            ["/c/projects"]
+            [PathBuf::from("/c/projects")]
         );
     }
 
@@ -307,7 +306,10 @@ mod tests {
                 "agents",
             )
         };
-        assert_eq!(resolve(&claw, &[], &[]), ["/h/.clawdbot/agents"]);
+        assert_eq!(
+            resolve(&claw, &[], &[]),
+            [PathBuf::from("/h/.clawdbot/agents")]
+        );
         assert_eq!(
             resolve(
                 &claw,
@@ -319,7 +321,10 @@ mod tests {
                     "/h/.openclaw-a b"
                 ]
             ),
-            ["/h/.openclaw/agents", "/h/.openclaw-work/agents"]
+            [
+                PathBuf::from("/h/.openclaw/agents"),
+                PathBuf::from("/h/.openclaw-work/agents")
+            ]
         );
         assert_eq!(
             resolve(
@@ -327,7 +332,7 @@ mod tests {
                 &[("OPENCLAW_STATE_DIR", "/s")],
                 &["/h/.openclaw-work"]
             ),
-            ["/s/agents"]
+            [PathBuf::from("/s/agents")]
         );
     }
 

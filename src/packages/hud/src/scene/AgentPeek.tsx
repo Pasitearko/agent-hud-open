@@ -32,7 +32,7 @@ export function peekItems(
     .map((q) => ({
       id: q.id,
       label: quotaShortName(q),
-      value: q.usedPercent == null ? "–" : `${Math.round(q.usedPercent)}%`,
+      value: q.usedPercent == null ? "--" : `${Math.round(q.usedPercent)}%`,
       color: q.usedPercent == null ? undefined : color(q.status),
     }));
   if (vendor.balance)
@@ -42,6 +42,8 @@ export function peekItems(
       value: vendor.balance,
       color: color(vendor.level),
     });
+  if (!items.length)
+    items.push({ id: "quota", label: zh ? "额度" : "Quota", value: "--" });
   return items;
 }
 
@@ -177,10 +179,23 @@ export function AgentPeek({
               fontSize: 12 * scale,
             }}
           >
-            {q.usedPercent == null ? "–" : `${Math.round(q.usedPercent)}%`}
+            {q.usedPercent == null ? "--" : `${Math.round(q.usedPercent)}%`}
           </strong>
         </div>
       ))}
+      {!vendor.quotas.length && !vendor.balance && (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            height: 18 * scale,
+          }}
+        >
+          <span style={{ opacity: 0.55 }}>{zh ? "额度" : "Quota"}</span>
+          <strong>--</strong>
+        </div>
+      )}
       {vendor.balance && (
         <div
           style={{

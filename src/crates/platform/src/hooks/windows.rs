@@ -84,6 +84,7 @@ pub(super) fn send(
         "hooks",
         &json!({"source":source,"flag":flag,"payload":payload}),
         PAYLOAD_LIMIT,
+        PAYLOAD_LIMIT,
         Duration::from_secs(if flag == "--permission-hook" {
             86405
         } else {

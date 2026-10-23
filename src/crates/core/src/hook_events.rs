@@ -212,17 +212,14 @@ impl HookEvidence {
                 "compaction" => newer(&mut entry.compaction, event),
                 "completion" => newer(&mut entry.completion, event),
                 "session-observation" => newer(&mut entry.observation, event),
-                "session-forget" => {
+                "session-forget"
                     if entry
                         .observation
                         .as_ref()
-                        .is_some_and(|old| old.data["turnId"] == event.data["turnId"])
-                    {
-                        entry.observation = None;
-                        true
-                    } else {
-                        false
-                    }
+                        .is_some_and(|old| old.data["turnId"] == event.data["turnId"]) =>
+                {
+                    entry.observation = None;
+                    true
                 }
                 _ => false,
             };

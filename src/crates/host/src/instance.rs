@@ -121,7 +121,7 @@ mod tests {
     #[test]
     fn a_second_launch_hands_over_to_this_executable_and_refuses_another_build() {
         let temp = tempfile::tempdir().unwrap();
-        let data = temp.path().join("instance.lock");
+        let data = temp.path().join("data/instance.lock");
         let executable = std::env::current_exe().unwrap();
         let take = || {
             launch(

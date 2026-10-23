@@ -25,6 +25,7 @@ mod transport;
 #[cfg(windows)]
 #[path = "windows.rs"]
 mod transport;
+pub use agent_hud_agents::windows_hook_handler;
 pub use entry::{entry, handle_with_io};
 pub use inbox::record_event;
 pub use install::{apply_plan, install_plan, InstallContext, InstallPlan};

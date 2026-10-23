@@ -4,6 +4,36 @@
 use super::configuration::{configuration, patch_configuration};
 use super::{hooks_of, Launch};
 use serde_json::{json, Value};
+
+/// Render one handler using the client's Windows launch contract. Both public
+/// callbacks and product-specific callbacks use this representation.
+pub fn windows_hook_handler(source: &str, flag: &str, executable: &str) -> Result<Value, String> {
+    let (source, hooks) = hooks_of(source)?;
+    if executable.is_empty() || executable.contains(['\r', '\n', '\0']) {
+        return Err("The Windows hook executable path is invalid".into());
+    }
+    if !flag.starts_with("--")
+        || flag.len() <= 2
+        || !flag
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'-')
+    {
+        return Err("The Windows hook flag is invalid".into());
+    }
+    match hooks.launch.windows.value() {
+        Some(Launch::CommandArgs) => Ok(json!({
+            "type": "command", "command": executable, "args": [flag, source]
+        })),
+        Some(Launch::ExecArgs) => Ok(json!({"exec": executable, "args": [flag, source]})),
+        Some(Launch::PowerShell) => Ok(json!({
+            "type": "command",
+            "command": format!("'{}' {flag} {source}", executable.replace('\'', "'\\''")),
+            "commandWindows": powershell(executable, flag, source)
+        })),
+        _ => Err(format!("{source} has no verified Windows hook launch contract; its configuration was not changed")),
+    }
+}
+
 pub fn patch_configuration_for_windows(
     source: &str,
     flag: &str,
@@ -50,9 +80,7 @@ pub fn patch_configuration_for_windows(
     let Some(executable) = executable else {
         return Ok(updated);
     };
-    if executable.is_empty() || executable.contains(['\r', '\n', '\0']) {
-        return Err("The Windows hook executable path is invalid".into());
-    }
+    let windows_handler = windows_hook_handler(source, flag, executable)?;
     for event in &description.events {
         if let Some(groups) = updated
             .get_mut("hooks")
@@ -66,8 +94,7 @@ pub fn patch_configuration_for_windows(
                         fields.remove("bash");
                         fields.remove("powershell");
                         fields.remove("command");
-                        fields.insert("exec".into(), json!(executable));
-                        fields.insert("args".into(), json!([flag, source]));
+                        fields.extend(windows_handler.as_object().unwrap().clone());
                     }
                 }
             } else {
@@ -77,13 +104,10 @@ pub fn patch_configuration_for_windows(
                             if handler["command"].as_str() != marker.as_deref() {
                                 continue;
                             }
-                            if let Some(Launch::CommandArgs) = launch {
-                                handler["command"] = json!(executable);
-                                handler["args"] = json!([flag, source]);
-                            } else {
-                                handler["commandWindows"] =
-                                    json!(powershell(executable, flag, source));
-                            }
+                            handler
+                                .as_object_mut()
+                                .unwrap()
+                                .extend(windows_handler.as_object().unwrap().clone());
                         }
                     }
                 }
@@ -124,4 +148,38 @@ fn powershell(executable: &str, flag: &str, source: &str) -> String {
         "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {}",
         base64::engine::general_purpose::STANDARD.encode(bytes)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine;
+
+    #[test]
+    fn remote_callbacks_use_the_same_windows_launch_contract() {
+        let executable = r"C:\Users\O'Brien\Agent HUD.exe";
+        let claude = windows_hook_handler("claude", "--remote-hook", executable).unwrap();
+        assert_eq!(claude["command"], executable);
+        assert_eq!(claude["args"], json!(["--remote-hook", "claude"]));
+        let codex = windows_hook_handler("codex", "--remote-hook", executable).unwrap();
+        let encoded = codex["commandWindows"]
+            .as_str()
+            .unwrap()
+            .split_whitespace()
+            .last()
+            .unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
+        let words = bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|bytes| u16::from_le_bytes(*bytes))
+            .collect::<Vec<_>>();
+        let script = String::from_utf16(&words).unwrap();
+        assert!(script.ends_with("& 'C:\\Users\\O''Brien\\Agent HUD.exe' --remote-hook codex"));
+        assert!(windows_hook_handler("codex", "--remote-hook; exit", executable).is_err());
+        assert!(windows_hook_handler("claude", "--remote-hook", "bad\npath").is_err());
+    }
 }

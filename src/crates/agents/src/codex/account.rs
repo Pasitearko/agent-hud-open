@@ -533,10 +533,8 @@ mod tests {
         assert_eq!(started[0].0, std::path::PathBuf::from("/bin/codex"));
         assert_eq!(started[0].1, ["app-server", "--listen", "stdio://"]);
         assert_eq!(started[0].2, "codex");
-        assert_eq!(
-            started[0].3,
-            [("CODEX_HOME".to_owned(), "/u/.codex".to_owned())]
-        );
+        let home = host.home().join(".codex").to_string_lossy().into_owned();
+        assert_eq!(started[0].3, [("CODEX_HOME".to_owned(), home.clone())]);
         let methods: Vec<_> = host
             .engine_sent
             .borrow()
@@ -561,15 +559,16 @@ mod tests {
         assert_eq!(reading.quotas[0]["consumerSource"], "codex");
         assert_eq!(reading.quotas[1]["usedPercent"], 40.0);
         let remembered: Value = serde_json::from_slice(&host.own.borrow()[IDENTITIES]).unwrap();
-        assert_eq!(remembered["/u/.codex/ws"], "A@example.com");
+        assert_eq!(remembered[format!("{home}/ws")], "A@example.com");
     }
 
     #[test]
     fn a_remembered_email_names_a_workspace_reported_alone() {
         let host = installed(limits(), Value::Null);
+        let home = host.home().join(".codex").to_string_lossy().into_owned();
         host.own.borrow_mut().insert(
             IDENTITIES.into(),
-            br#"{"/u/.codex/ws": "a@example.com"}"#.to_vec(),
+            serde_json::to_vec(&json!({format!("{home}/ws"): "a@example.com"})).unwrap(),
         );
         let account = read(&host).unwrap().account.unwrap();
         assert_eq!(account["label"], "a@example.com");

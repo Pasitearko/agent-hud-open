@@ -93,6 +93,10 @@ pub(crate) fn addresses() -> Vec<String> {
     }
 }
 
+pub(crate) fn create_directory(path: &Path) -> Result<()> {
+    fs::create_dir_all(path).map_err(|e| e.to_string())
+}
+
 pub(crate) fn protect_directory(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())

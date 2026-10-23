@@ -3,7 +3,8 @@
 //! on the operating system:
 //!   wake_pair, Wake, Waiter, wait, Wait   listener cancellation
 //!   addresses                             this device's LAN IPv4 addresses
-//!   protect_directory, private_file       owner-only credentials on disk
+//!   create_directory, protect_directory,  owner-only credentials on disk
+//!     private_file
 #[cfg(unix)]
 #[path = "unix.rs"]
 mod host;

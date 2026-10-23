@@ -1,6 +1,6 @@
 //! Shared POSIX process transport. Host-specific command sources live beside
 //! each host module; provider identity/flags remain in the account adapter.
-use super::ProcessInfo;
+use super::{Environment, ProcessInfo};
 mod files;
 pub(crate) use files::{
     hook_configuration, owned_by_user, owner_only, private_directory, private_file, read_stdin,
@@ -16,6 +16,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub(crate) fn environment_value<'a>(env: &'a Environment, key: &str) -> Option<&'a str> {
+    env.get(key).map(String::as_str)
+}
+pub(crate) fn is_shell(path: &Path) -> bool {
+    matches!(path.to_str(), Some("/bin/sh" | "/bin/bash" | "/bin/zsh"))
+}
 pub(super) fn executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     fs::metadata(path)

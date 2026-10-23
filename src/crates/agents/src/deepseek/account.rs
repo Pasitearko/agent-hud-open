@@ -263,12 +263,13 @@ mod tests {
         let row = &reading.billing[0];
         assert_eq!(row["amount"], 12.5);
         assert_eq!(row["currency"], "CNY");
-        assert_eq!(row["consumerHome"], "/u/.dsh");
-        let identity = legacy_unresolved("DeepSeek", "/u/.dsh");
+        let home = host.home().join(".dsh").to_string_lossy().into_owned();
+        assert_eq!(row["consumerHome"], home);
+        let identity = legacy_unresolved("DeepSeek", &home);
         assert_eq!(row["accountId"], identity.as_str());
         assert_eq!(
             row["id"],
-            format!("{}:CNY", account_id("deepseek", &["/u/.dsh"]))
+            format!("{}:CNY", account_id("deepseek", &[&home]))
         );
         assert_eq!(reading.account.unwrap()["id"], identity.as_str());
     }

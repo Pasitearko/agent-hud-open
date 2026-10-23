@@ -62,7 +62,7 @@ pub use hooks::configuration::{
 pub use hooks::events::{enrich_codebuddy_completion, parse_event, HookEvent};
 pub use hooks::observer::parse_observation;
 pub use hooks::request::{parse_request, Request};
-pub use hooks::windows::patch_configuration_for_windows;
+pub use hooks::windows::{patch_configuration_for_windows, windows_hook_handler};
 
 /// The clients with a permission hook, from their descriptors (see the test).
 pub const PERMISSION_SOURCES: &[&str] = &[

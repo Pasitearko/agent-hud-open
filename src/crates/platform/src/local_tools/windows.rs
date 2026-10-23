@@ -22,6 +22,7 @@ pub fn request(data: &Path, request: &Value) -> Result<Value, String> {
         data,
         "tools",
         request,
+        REQUEST_LIMIT as usize,
         RESPONSE_LIMIT as usize,
         Duration::from_secs(40),
         || false,

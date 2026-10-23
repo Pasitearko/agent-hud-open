@@ -53,13 +53,11 @@ cargo test --workspace
 
 `pnpm run format` runs rustfmt and Prettier with the repository's settings, and CI refuses unformatted code. `pnpm run lint` is clippy with warnings as errors, as CI runs it on each operating system. Editors that read `.editorconfig`, `rustfmt.toml` and `.prettierrc.json` format the same way on save.
 
-On macOS, also type-check the Windows adapters (see [platform builds](docs/platform-builds.md)):
-
-```sh
-cargo check --workspace --tests --target x86_64-pc-windows-gnu
-```
-
-A passing check is not proof that a host works. Say in the change what you ran on a real machine.
+Windows compilation and adapter tests run on GitHub's native Windows runner.
+Use the **Windows desktop** workflow and download its installer for real-machine
+acceptance; see [platform builds](docs/platform-builds.md). There is no requirement
+to install a Windows cross compiler on macOS. State which checks ran in CI and
+which behaviors were actually tested on Windows.
 
 ## Tao
 

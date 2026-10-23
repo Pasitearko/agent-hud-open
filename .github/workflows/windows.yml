@@ -1,0 +1,54 @@
+name: Windows desktop
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'codex/windows-*']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: pnpm run check:platform
+      - run: pnpm run check:packages
+      - run: pnpm run check:clients
+      - run: pnpm run typecheck
+      - run: pnpm run test:ts
+      - name: Prepare resources for Rust checks
+        run: New-Item -ItemType Directory -Force src/apps/desktop/src-tauri/resources | Out-Null
+      - name: Check and test native Windows adapters
+        run: |
+          cargo clippy --workspace --tests --locked -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --workspace --locked --no-fail-fast
+      - name: Build Windows NSIS installer
+        run: pnpm run build:windows -- --bundle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-hud-open-windows-x86_64-unsigned
+          path: target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+          retention-days: 14

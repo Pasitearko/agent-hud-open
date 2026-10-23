@@ -9,14 +9,11 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
-fn shell(path: &Path) -> bool {
-    matches!(path.to_str(), Some("/bin/sh" | "/bin/bash" | "/bin/zsh"))
-}
 /// The callback's parent processes, nearest first, shells left out.
 fn ancestors() -> Vec<Ancestor> {
     crate::os::parent_processes()
         .into_iter()
-        .filter(|process| !shell(&process.executable))
+        .filter(|process| !crate::os::is_shell(&process.executable))
         .map(|process| Ancestor {
             resolved: process.executable.canonicalize().ok(),
             executable: process.executable,

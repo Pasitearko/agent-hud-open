@@ -13,14 +13,14 @@ fn engine(directory: &std::path::Path) -> Command {
 
 #[test]
 fn standalone_refuses_an_owned_data_directory_before_opening_its_database() {
-    let directory = tempfile::tempdir().unwrap();
-    let _owner =
-        instance::claim_collector(&directory.path().join("instance.lock"), None, None).unwrap();
-    let output = engine(directory.path()).output().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("data");
+    let _owner = instance::claim_collector(&directory.join("instance.lock"), None, None).unwrap();
+    let output = engine(&directory).output().unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty(), "stdout stays protocol-only");
-    assert!(!directory.path().join("ingestion.sqlite").exists());
-    assert!(!directory.path().join("settings.json").exists());
+    assert!(!directory.join("ingestion.sqlite").exists());
+    assert!(!directory.join("settings.json").exists());
 }
 
 #[test]
@@ -34,15 +34,12 @@ fn standalone_refuses_an_unavailable_lock_before_opening_its_database() {
 
 #[test]
 fn app_channel_stays_a_relay_while_a_collector_owns_the_data() {
-    let directory = tempfile::tempdir().unwrap();
-    let _owner =
-        instance::claim_collector(&directory.path().join("instance.lock"), None, None).unwrap();
-    let output = engine(directory.path())
-        .arg("--app-channel")
-        .output()
-        .unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("data");
+    let _owner = instance::claim_collector(&directory.join("instance.lock"), None, None).unwrap();
+    let output = engine(&directory).arg("--app-channel").output().unwrap();
     assert!(output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(!directory.path().join("ingestion.sqlite").exists());
-    assert!(!directory.path().join("settings.json").exists());
+    assert!(!directory.join("ingestion.sqlite").exists());
+    assert!(!directory.join("settings.json").exists());
 }

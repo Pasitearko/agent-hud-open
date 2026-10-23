@@ -31,8 +31,8 @@ const queueRecency = 86_400_000;
  *   (ReportView.queueVendors);
  * - Simple: every window's agent in row order, then the agents billed by
  *   balance alone (SimpleMeterItem.items).
- * Installed clients with nothing to show do not appear. Also returns when
- * the list next changes on its own, as a session ages out of the day. */
+ * Each mode also includes detected, enabled clients without a reading.
+ * Also returns when a recent session ages out of the day. */
 export function restingAgents(snapshot: Snapshot, mode: HUDMode, now: number) {
   const order: string[] = [];
   const add = (source: string) => {
@@ -45,25 +45,29 @@ export function restingAgents(snapshot: Snapshot, mode: HUDMode, now: number) {
       .filter((q) => q.usedPercent != null && q.status !== "stale")
       .forEach((q) => add(q.vendor));
     snapshot.billing.forEach((b) => add(b.vendor));
-    return { order, expiresAt };
+  } else {
+    snapshot.quotas.forEach((q) => add(q.vendor));
+    if (mode === "simple") {
+      snapshot.billing.forEach((b) => add(b.vendor));
+    } else {
+      const live = (source: string) =>
+        snapshot.sourcePreferences?.[sourceID(snapshot, source)]?.live !==
+        false;
+      snapshot.sessions
+        .map((s) => ({ source: s.source, at: Date.parse(s.updatedAt) }))
+        .filter(({ source, at }) => {
+          const expires = at + queueRecency;
+          if (!Number.isFinite(expires) || now > expires || !live(source))
+            return false;
+          expiresAt = Math.min(expiresAt, expires);
+          return true;
+        })
+        .sort((a, b) => b.at - a.at)
+        .forEach(({ source }) => add(source));
+    }
   }
-  snapshot.quotas.forEach((q) => add(q.vendor));
-  if (mode === "simple") {
-    snapshot.billing.forEach((b) => add(b.vendor));
-    return { order, expiresAt };
-  }
-  const live = (source: string) =>
-    snapshot.sourcePreferences?.[sourceID(snapshot, source)]?.live !== false;
-  snapshot.sessions
-    .map((s) => ({ source: s.source, at: Date.parse(s.updatedAt) }))
-    .filter(({ source, at }) => {
-      const expires = at + queueRecency;
-      if (!Number.isFinite(expires) || now > expires || !live(source))
-        return false;
-      expiresAt = Math.min(expiresAt, expires);
-      return true;
-    })
-    .sort((a, b) => b.at - a.at)
-    .forEach(({ source }) => add(source));
+  snapshot.providers
+    .filter((provider) => provider.detected && provider.enabled)
+    .forEach((provider) => add(provider.id));
   return { order, expiresAt };
 }

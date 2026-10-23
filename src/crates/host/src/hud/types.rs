@@ -285,7 +285,7 @@ pub fn hud_native_capabilities() -> HudCapabilities {
 pub(super) fn base_limitations() -> Vec<&'static str> {
     vec![
         "Native focus, fullscreen and Spaces behavior requires platform GUI qualification; compile checks do not certify it.",
-        "Monitor indices are session-only. macOS display UUIDs are persistent; other hosts expose session-only IDs.",
+        "Monitor indices are session-only. A non-null persistentId identifies the host's display device; hardware or driver changes can alter it.",
         "Each configured connected screen owns a separate lazy HUD window and pointer worker.",
         "Reported rectangles control input using a native 32 ms pointer poll; this is not the original event-driven hover state machine or per-pixel hit testing.",
     ]

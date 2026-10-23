@@ -386,7 +386,8 @@ fn a_log_this_run_writes_keeps_the_meter_view() {
     assert!(backend
         .meters
         .changes
-        .contains(path.to_string_lossy().as_ref()));
+        .iter()
+        .any(|changed| std::path::Path::new(changed) == path));
     let snapshot = backend.request("refresh", json!({})).unwrap();
     assert_eq!(snapshot["totals"]["total"], 70);
 }

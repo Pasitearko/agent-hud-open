@@ -57,13 +57,14 @@ const snapshot = {
   sourcePreferences: { pi: { live: false } },
 } as never;
 
-test("a Dynamic dock shows windows' agents, then the day's sessions newest first, never installed clients alone", () => {
+test("a Dynamic dock shows windows' agents, then recent sessions and detected clients", () => {
   // Kimi's session is older than a day; Pi's live status is off; DeepSeek has only a balance.
   assert.deepEqual(restingAgents(snapshot, "logos", now).order, [
     "claude",
     "codex",
     "opencode",
     "cursor",
+    "kimi",
   ]);
 });
 
@@ -72,6 +73,8 @@ test("a Simple panel shows windows' agents, then the agents billed by balance al
     "claude",
     "codex",
     "deepseek",
+    "kimi",
+    "cursor",
   ]);
 });
 
@@ -79,5 +82,25 @@ test("the notch glow shows windows with a level, then balances", () => {
   assert.deepEqual(restingAgents(snapshot, "notch", now).order, [
     "claude",
     "deepseek",
+    "kimi",
+    "cursor",
   ]);
 });
+
+for (const mode of ["notch", "logos", "simple"] as const) {
+  test(`${mode} keeps detected clients without quotas or sessions, but not disabled or absent clients`, () => {
+    const onlyInstalled = {
+      quotas: [],
+      billing: [],
+      sessions: [],
+      providers: [
+        { id: "codex", name: "Codex", enabled: true, detected: true },
+        { id: "chatgpt", name: "ChatGPT", enabled: true, detected: true },
+        { id: "claude", name: "Claude", enabled: false, detected: true },
+        { id: "cursor", name: "Cursor", enabled: true, detected: false },
+      ],
+    } as never;
+    assert.deepEqual(restingAgents(onlyInstalled, mode, now).order, ["codex"]);
+    assert.equal(restingAgents(onlyInstalled, mode, now).expiresAt, Infinity);
+  });
+}

@@ -1,5 +1,6 @@
 //! SMAppService uses only public frameworks. The Mac never posts system
 //! notifications: the HUD island is its alert surface.
+pub(super) use super::unix::{client_command_line, configure_client_command, stop_client};
 use objc2::{
     msg_send,
     rc::Retained,
@@ -40,7 +41,7 @@ pub(super) fn register_if_never_registered() -> bool {
     }
     true
 }
-pub(super) fn set_login(enabled: bool) -> Result<(), String> {
+pub(super) fn set_login(_identifier: &str, enabled: bool) -> Result<(), String> {
     let service = service().ok_or("Launch at login requires a real macOS app bundle")?;
     let current: isize = unsafe { msg_send![&*service, status] };
     if enabled && current == 1 || !enabled && current == 0 {
@@ -60,7 +61,7 @@ pub(super) fn set_login(enabled: bool) -> Result<(), String> {
         Err("macOS could not update the login item; check Login Items in System Settings.".into())
     }
 }
-pub(super) fn status() -> Result<Value, String> {
+pub(super) fn status(_identifier: &str) -> Result<Value, String> {
     Ok(json!({"platform":"macos","launchAtLogin":login()}))
 }
 

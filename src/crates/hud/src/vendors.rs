@@ -106,7 +106,7 @@ pub fn configured<'a>(
 pub fn meter_label(vendor: &Vendor) -> String {
     match vendor.used {
         Some(used) => format!("{}%", used.round()),
-        None => vendor.balance.clone().unwrap_or_else(|| "–".into()),
+        None => vendor.balance.clone().unwrap_or_else(|| "--".into()),
     }
 }
 
@@ -284,5 +284,41 @@ mod tests {
             now,
         );
         assert_eq!(unknown.len(), 3);
+    }
+    #[test]
+    fn detected_clients_without_readings_keep_their_marks_and_unknown_meter() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-23T12:00:00Z")
+            .unwrap()
+            .timestamp_millis();
+        let snapshot = json!({
+            "quotas": [{"vendor":"claude", "usedPercent":0, "status":"normal"}],
+            "billing": [{"vendor":"deepseek", "amount":8.85, "currency":"CNY"}],
+            "sessions": [{"source":"opencode", "updatedAt":"2026-10-23T11:00:00Z"}],
+            "providers": [
+                {"id":"codex", "detected":true, "enabled":true},
+                {"id":"chatgpt", "detected":true, "enabled":true},
+                {"id":"claude", "detected":true, "enabled":true},
+                {"id":"kimi", "detected":true, "enabled":false},
+                {"id":"cursor", "detected":false, "enabled":true}
+            ]
+        });
+        for (mode, expected) in [
+            ("notch", vec!["claude", "deepseek", "openai"]),
+            ("simple", vec!["claude", "deepseek", "openai"]),
+            ("logos", vec!["claude", "opencode", "openai"]),
+        ] {
+            let rows = vendors(&snapshot, mode, now);
+            assert_eq!(
+                rows.iter().map(|row| row.key.as_str()).collect::<Vec<_>>(),
+                expected
+            );
+            let codex = rows.iter().find(|row| row.key == "openai").unwrap();
+            assert_eq!(codex.used, None);
+            assert!(codex.quotas.is_empty());
+            assert_eq!(meter_label(codex), "--");
+            let selected = configured(&snapshot, mode, &json!({"hud":{"agents":["codex"]}}), now);
+            assert_eq!(selected.len(), 1);
+            assert_eq!(selected[0].key, "openai");
+        }
     }
 }

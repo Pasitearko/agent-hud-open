@@ -2,10 +2,13 @@
 //! pixels, with Win32 button and modifier state. Geometry, hover and drag state
 //! stay in the shared owner.
 pub(super) use super::generic::{
-    begin_text_focus, end_text_focus, global_pointer, measure_screens, panel_builder, place,
-    screen, set_drag_cursor, shown, TextFocusOrigin,
+    begin_text_focus, end_text_focus, global_pointer, panel_builder, place, set_drag_cursor, shown,
+    TextFocusOrigin,
 };
 use super::{base_limitations, HudCapabilities, PointerKeys};
+#[path = "windows/displays.rs"]
+mod displays;
+pub(super) use displays::{measure_screens, screen};
 
 /// Windows reports global physical desktop pixels, with a per-window DPI scale.
 pub(super) const GLOBAL_POINTS: bool = false;
@@ -27,15 +30,37 @@ fn key_down(virtual_key: i32) -> bool {
 }
 
 pub(super) fn left_mouse_down() -> Result<bool, String> {
-    Ok(key_down(0x01))
+    Ok(key_down(mouse_button_keys().0))
+}
+
+/// GetAsyncKeyState reports physical buttons; the HUD follows the user's
+/// primary button just as the WebView's pointer events do.
+fn mouse_button_keys() -> (i32, i32) {
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON};
+    logical_mouse_buttons(unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0)
+}
+
+fn logical_mouse_buttons(swapped: bool) -> (i32, i32) {
+    if swapped {
+        (0x02, 0x01)
+    } else {
+        (0x01, 0x02)
+    }
 }
 
 pub(super) fn pointer_keys() -> PointerKeys {
-    let buttons = [(0x01, 1), (0x02, 2), (0x04, 4), (0x05, 8), (0x06, 16)]
-        .into_iter()
-        .fold(0, |bits, (key, mask)| {
-            bits | if key_down(key) { mask } else { 0 }
-        });
+    let (primary, secondary) = mouse_button_keys();
+    let buttons = [
+        (primary, 1),
+        (secondary, 2),
+        (0x04, 4),
+        (0x05, 8),
+        (0x06, 16),
+    ]
+    .into_iter()
+    .fold(0, |bits, (key, mask)| {
+        bits | if key_down(key) { mask } else { 0 }
+    });
     PointerKeys {
         buttons: Some(buttons),
         alt: Some(key_down(0x12)),
@@ -48,6 +73,7 @@ pub(super) fn pointer_keys() -> PointerKeys {
 pub(super) fn capabilities() -> HudCapabilities {
     let mut limitations = base_limitations();
     limitations.push("Tauri does not support visible-on-all-workspaces on Windows. Exclusive fullscreen applications and secure desktops are not covered.");
+    limitations.push("Windows monitor device paths identify unambiguous displays. Mirroring, remote sessions, or unavailable device paths use session IDs; moving a display to another connection or changing its driver can change its device path.");
     HudCapabilities {
         platform: std::env::consts::OS,
         backend: "win32-webview2",
@@ -67,7 +93,18 @@ pub(super) fn capabilities() -> HudCapabilities {
         all_workspaces: "unsupported",
         fullscreen_overlay: "not_guaranteed",
         hardware_notch: false,
-        persistent_display_identity: false,
+        persistent_display_identity: true,
         limitations,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn swapped_mouse_buttons_preserve_primary_and_secondary_semantics() {
+        assert_eq!(logical_mouse_buttons(false), (0x01, 0x02));
+        assert_eq!(logical_mouse_buttons(true), (0x02, 0x01));
     }
 }

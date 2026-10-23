@@ -412,7 +412,8 @@ mod tests {
             reading.account.unwrap()["id"],
             legacy_unresolved("Claude", "").as_str()
         );
-        let id = account_id("claude", &["unresolved", "/u/.claude"]);
+        let config = host.home().join(".claude");
+        let id = account_id("claude", &["unresolved", &config.to_string_lossy()]);
         assert_eq!(reading.quotas[0]["id"], format!("{id}:claude-session"));
     }
 

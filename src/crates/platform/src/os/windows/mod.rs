@@ -1,5 +1,6 @@
 use super::{joined_path, path_entries, variable, Environment, ProcessInfo};
 mod apps;
+mod codex;
 mod files;
 pub(crate) mod pipe;
 mod process;
@@ -41,10 +42,19 @@ pub(crate) fn caches_dir(home: &Path) -> PathBuf {
 pub(crate) fn app_support(home: &Path, env: &Environment) -> PathBuf {
     variable(env, "APPDATA", home).unwrap_or_else(|| home.join("AppData/Roaming"))
 }
+/// Windows environment names are case-insensitive even when captured in a map.
+pub(crate) fn environment_value<'a>(env: &'a Environment, key: &str) -> Option<&'a str> {
+    env.iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(key))
+        .map(|(_, value)| value.as_str())
+}
 fn local_app(home: &Path, env: &Environment) -> PathBuf {
     variable(env, "LOCALAPPDATA", home).unwrap_or_else(|| home.join("AppData/Local"))
 }
 pub(crate) fn application_installed(home: &Path, env: &Environment, name: &str) -> bool {
+    if matches!(name, "Codex" | "ChatGPT") {
+        return codex::installation(home, env).installed;
+    }
     [
         local_app(home, env).join("Programs"),
         variable(env, "ProgramFiles", home).unwrap_or_else(|| PathBuf::from("C:/Program Files")),
@@ -84,16 +94,35 @@ pub(crate) fn configure_command(command: &mut Command) {
     use std::os::windows::process::CommandExt;
     command.creation_flags(0x08000000);
 }
+pub(crate) fn is_shell(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            [
+                "cmd.exe",
+                "powershell.exe",
+                "pwsh.exe",
+                "bash.exe",
+                "sh.exe",
+            ]
+            .iter()
+            .any(|shell| name.eq_ignore_ascii_case(shell))
+        })
+}
 pub(crate) fn engine_candidates(home: &Path, env: &Environment, name: &str) -> Vec<PathBuf> {
+    let mut paths = if name == "codex" {
+        codex::installation(home, env).engines
+    } else {
+        Vec::new()
+    };
     let mut dirs = vec![
         home.join(".local/bin"),
         home.join(".bun/bin"),
         home.join(".claude/local"),
     ];
     dirs.extend(executable_dirs(home, env));
-    dirs.into_iter()
-        .map(|dir| dir.join(format!("{name}.exe")))
-        .collect()
+    paths.extend(dirs.into_iter().map(|dir| dir.join(format!("{name}.exe"))));
+    paths
 }
 pub(crate) fn engine_path(home: &Path, env: &Environment) -> String {
     joined_path(executable_dirs(home, env))
@@ -168,4 +197,25 @@ pub(crate) fn open_session_url(url: &str) -> Result<(), String> {
 /// Swift UserDefaults has no native source on this host.
 pub(crate) fn legacy_preferences() -> Result<Option<serde_json::Value>, String> {
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn captured_windows_environment_keeps_os_name_semantics() {
+        let env = Environment::from([
+            ("AppData".into(), "D:\\profile\\roaming".into()),
+            ("Path".into(), "C:\\tools;D:\\bin".into()),
+        ]);
+        assert_eq!(
+            app_support(Path::new("C:\\Users\\me"), &env),
+            PathBuf::from("D:\\profile\\roaming")
+        );
+        assert_eq!(
+            path_entries(&env),
+            vec![PathBuf::from("C:\\tools"), PathBuf::from("D:\\bin")]
+        );
+    }
 }

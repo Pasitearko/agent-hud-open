@@ -71,14 +71,15 @@ pub fn discover_at(home: &Path, env: &HashMap<String, String>) -> Vec<ProviderDi
             }) {
                 mark(found, "installed", "executable");
             }
-            if discovery
-                .apps
-                .iter()
-                .any(|name| crate::os::application_installed(home, env, name))
-                || discovery
-                    .bundles
+            if !found.installed
+                && (discovery
+                    .apps
                     .iter()
-                    .any(|id| crate::os::registered_bundle(id))
+                    .any(|name| crate::os::application_installed(home, env, name))
+                    || discovery
+                        .bundles
+                        .iter()
+                        .any(|id| crate::os::registered_bundle(id)))
             {
                 mark(found, "installed", "desktop-application");
             }

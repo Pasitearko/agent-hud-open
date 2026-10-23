@@ -37,6 +37,7 @@ pub(super) fn hand_over(lock: &Path) -> bool {
         "instance",
         &json!("show"),
         LIMIT,
+        LIMIT,
         Duration::from_secs(2),
         || false,
     )
