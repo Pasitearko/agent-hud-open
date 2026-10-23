@@ -317,6 +317,14 @@ pub(super) fn accepts_source(path: &Path, source: &str) -> bool {
     }
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     match source {
+        // A session, or a subagent's transcript. A subagents folder also holds the
+        // Workflow tool's journal.jsonl, a run log with no turns: read as a session it
+        // would never report an event and leave the Claude mark faded.
+        "claude" => {
+            name.ends_with(".jsonl")
+                && (name.starts_with("agent-")
+                    || !path.components().any(|p| p.as_os_str() == "subagents"))
+        }
         // A rollout, plain or compressed (agent-hud-native-open CodexRollouts.accepts).
         "codex" => {
             name.starts_with("rollout-")
@@ -570,6 +578,29 @@ mod tests {
         ));
         assert!(!accepts(
             Path::new("/h/.codex/sessions/2026/10/21/notes.jsonl"),
+            &roots
+        ));
+    }
+
+    #[test]
+    fn claude_lists_sessions_and_subagents_but_not_workflow_journals() {
+        let roots = vec![(PathBuf::from("/h/.claude/projects"), "claude")];
+        let session = "/h/.claude/projects/p/a13ae0b7-3ba4-4e35-af3f-80f8fb300c67";
+        assert!(accepts(Path::new(&format!("{session}.jsonl")), &roots));
+        assert!(accepts(
+            Path::new(&format!("{session}/subagents/agent-a1.jsonl")),
+            &roots
+        ));
+        assert!(accepts(
+            Path::new(&format!(
+                "{session}/subagents/workflows/wf_93f53f2f-2ce/agent-a2.jsonl"
+            )),
+            &roots
+        ));
+        assert!(!accepts(
+            Path::new(&format!(
+                "{session}/subagents/workflows/wf_93f53f2f-2ce/journal.jsonl"
+            )),
             &roots
         ));
     }
