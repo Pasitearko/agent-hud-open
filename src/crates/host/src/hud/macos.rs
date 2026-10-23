@@ -5,10 +5,10 @@ use super::{
     ScreenMeasurement, Shared,
 };
 use objc2::runtime::NSObjectProtocol;
-use objc2::{rc::Retained, MainThreadMarker};
+use objc2::{rc::Retained, MainThreadMarker, Message};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationOptions, NSCursor, NSRunningApplication, NSScreen,
-    NSStatusWindowLevel, NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior,
+    NSStatusWindowLevel, NSView, NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior,
     NSWorkspace,
 };
 use objc2_core_foundation::{CFRetained, CFUUID};
@@ -286,6 +286,7 @@ pub(super) fn begin_text_focus(
             if !native.isKeyWindow() {
                 return Err("The HUD panel could not obtain keyboard focus".into());
             }
+            focus_web_view(native);
             return Ok(None);
         }
         let current = NSRunningApplication::currentApplication();
@@ -307,6 +308,32 @@ pub(super) fn begin_text_focus(
             previous.map(TextFocusOrigin)
         })
     })
+}
+
+/// Keys and ⌘C reach the page only while its web view is the first responder.
+/// Focusing a text field asks WebKit for that; a selection of plain words does
+/// not, so the panel hands it over here unless something inside already has it.
+fn focus_web_view(window: &NSWindow) {
+    let Some(content) = window.contentView() else {
+        return;
+    };
+    let Some(web) = web_view(&content) else {
+        return;
+    };
+    let held = window
+        .firstResponder()
+        .and_then(|responder| responder.downcast::<NSView>().ok())
+        .is_some_and(|view| view.isDescendantOf(&web));
+    if !held {
+        window.makeFirstResponder(Some(&web));
+    }
+}
+
+fn web_view(view: &NSView) -> Option<Retained<NSView>> {
+    if view.isKindOfClass(objc2::class!(WKWebView)) {
+        return Some(view.retain());
+    }
+    view.subviews().iter().find_map(|child| web_view(&child))
 }
 
 pub(super) fn end_text_focus(

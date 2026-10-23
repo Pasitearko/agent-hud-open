@@ -109,7 +109,10 @@ export default function NativeHUDSurface({
   const requestIdentity = snapshot.approvals
     .map((request) => request.id)
     .join("\0");
-  const textFocusOwner = useRef<{ verify: () => void } | null>(null);
+  const textFocusOwner = useRef<{
+    verify: () => void;
+    leave: () => void;
+  } | null>(null);
   useEffect(() => {
     if (!isTauri()) return;
     type TextControl = HTMLInputElement | HTMLTextAreaElement;
@@ -146,6 +149,25 @@ export default function NativeHUDSurface({
     let wanted = false,
       disposed = false,
       epoch = 0;
+    // Words selected outside a text field also take the keyboard, so ⌘C
+    // copies them instead of reaching the app in front. Unlike typing, this
+    // leaves the panel's opening and closing alone.
+    let selecting = false,
+      pressed = false;
+    const selected = (): Element | null => {
+      const selection = document.getSelection();
+      if (!selection || selection.isCollapsed || !selection.rangeCount)
+        return null;
+      const node = selection.getRangeAt(0).commonAncestorContainer;
+      const owner = node instanceof Element ? node : node.parentElement;
+      if (
+        !owner?.isConnected ||
+        owner.closest("[inert], [aria-hidden=true]") ||
+        editable(owner)
+      )
+        return null;
+      return owner;
+    };
     let serial: Promise<void> = Promise.resolve();
     // A release carries this surface's identity, so a late unmount cannot clear
     // another surface's newer lease after React remounts it.
@@ -153,6 +175,7 @@ export default function NativeHUDSurface({
     const release = () => {
       if (!wanted) return;
       wanted = false;
+      selecting = false;
       setTextFocused(false);
       changed.disconnect();
       epoch += 1;
@@ -178,13 +201,22 @@ export default function NativeHUDSurface({
     };
     const owner = {
       verify: () => {
-        if (wanted && !verified(element)) release();
+        if (!wanted || (selecting && pressed)) return;
+        if (selecting ? !selected() : !verified(element)) release();
+      },
+      // The pointer left the HUD: its panel closes, so the selection goes
+      // and the keys go back.
+      leave: () => {
+        if (!selecting) return;
+        document.getSelection()?.removeAllRanges();
+        release();
       },
     };
     textFocusOwner.current = owner;
     const acquire = (target: TextControl, refocus: boolean) => {
       element = target;
       wanted = true;
+      selecting = false;
       setTextFocused(true);
       const root = document.getElementById("root");
       if (root) changed.observe(root, { childList: true, subtree: true });
@@ -211,14 +243,53 @@ export default function NativeHUDSurface({
           }
         });
     };
+    const holdSelection = () => {
+      if (wanted || !selected()) return;
+      wanted = true;
+      selecting = true;
+      const root = document.getElementById("root");
+      if (root) changed.observe(root, { childList: true, subtree: true });
+      const captured = ++epoch;
+      serial = serial
+        .catch(() => undefined)
+        .then(async () => {
+          if (
+            disposed ||
+            !wanted ||
+            !selecting ||
+            captured !== epoch ||
+            !selected()
+          )
+            return;
+          await invoke("hud_text_focus", { active: true, leaseId });
+        })
+        .catch((error) => {
+          if (!disposed && captured === epoch) {
+            console.error("HUD keyboard focus failed", error);
+            release();
+          }
+        });
+    };
     const pointerDown = (event: PointerEvent) => {
       if (!event.isTrusted || event.button !== 0) return;
+      pressed = true;
       const target = editable(event.target);
       if (!target || !verified(target)) {
-        release();
+        // A press may start a new selection: a selection's keys wait for it
+        // to end rather than going back mid-drag.
+        if (!selecting) release();
         return;
       }
       acquire(target, true);
+    };
+    const pointerUp = (event: PointerEvent) => {
+      if (!event.isTrusted || event.button !== 0) return;
+      pressed = false;
+      if (selected()) holdSelection();
+      else if (selecting) release();
+    };
+    const selectionChange = () => {
+      if (selecting && !pressed && !selected()) release();
     };
     const focusIn = (event: FocusEvent) => {
       const target = editable(event.target);
@@ -227,13 +298,15 @@ export default function NativeHUDSurface({
     };
     const focusOut = () =>
       queueMicrotask(() => {
-        if (disposed || !wanted) return;
+        if (disposed || !wanted || selecting) return;
         const next = editable(document.activeElement);
         if (next && verified(next)) element = next;
         else release();
       });
     const changed = new MutationObserver(owner.verify);
     document.addEventListener("pointerdown", pointerDown, true);
+    document.addEventListener("pointerup", pointerUp, true);
+    document.addEventListener("selectionchange", selectionChange);
     document.addEventListener("focusin", focusIn, true);
     document.addEventListener("focusout", focusOut, true);
     window.addEventListener("blur", release);
@@ -243,6 +316,8 @@ export default function NativeHUDSurface({
       release();
       changed.disconnect();
       document.removeEventListener("pointerdown", pointerDown, true);
+      document.removeEventListener("pointerup", pointerUp, true);
+      document.removeEventListener("selectionchange", selectionChange);
       document.removeEventListener("focusin", focusIn, true);
       document.removeEventListener("focusout", focusOut, true);
       window.removeEventListener("blur", release);
@@ -257,6 +332,10 @@ export default function NativeHUDSurface({
   const [nativePointer, setNativePointer] = useState<
     HUDNativePointer | undefined
   >(() => (isTauri() ? outsidePointer : undefined));
+  const pointerInside = nativePointer?.inside;
+  useEffect(() => {
+    if (pointerInside === false) textFocusOwner.current?.leave();
+  }, [pointerInside]);
   const pointerRevision = useRef(0);
   const lastPreview = useRef<Pick<
     HUDConfig,
