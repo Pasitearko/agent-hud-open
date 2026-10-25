@@ -492,3 +492,19 @@ const CONTEXT_OPENINGS: [&str; 7] = [
     "<recommended_plugins>",
     "<skill>",
 ];
+
+/// Codex names its turn on most lines (`turn_id`) and says once when it began
+/// (`task_started`).
+pub static TURNS: crate::transcript::turns::Turns = crate::transcript::turns::Turns {
+    start: |value| {
+        let payload = &value["payload"];
+        let id = payload["turn_id"].as_str()?;
+        let begins = value["type"] == "event_msg" && payload["type"] == "task_started";
+        Some(crate::transcript::turns::TurnStart {
+            turn: Some(id.into()),
+            started: begins.then(|| value.get("timestamp").cloned()).flatten(),
+            whole: false,
+        })
+    },
+    may_name: |line| crate::transcript::turns::has(line, b"\"turn_id\""),
+};

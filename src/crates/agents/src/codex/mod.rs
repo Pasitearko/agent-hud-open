@@ -58,6 +58,7 @@ pub static AGENT: Agent = Agent {
     channel: Some(&DESKTOP),
     program: Some(process::PROGRAM),
     replies: None,
+    turns: Some(&transcript::TURNS),
     sources: crate::everywhere(&SOURCES),
     discovery: &DISCOVERY,
 };

@@ -117,3 +117,24 @@ impl Log {
         }
     }
 }
+
+/// A Copilot turn starts at the user's message or the assistant's turn start.
+pub static TURNS: crate::transcript::turns::Turns = crate::transcript::turns::Turns {
+    start: |value| {
+        if !matches!(
+            value["type"].as_str(),
+            Some("user.message" | "assistant.turn_start")
+        ) {
+            return None;
+        }
+        let id = value["id"].as_str()?;
+        Some(crate::transcript::turns::TurnStart::whole(
+            Some(id.to_owned()),
+            value.get("timestamp"),
+        ))
+    },
+    may_name: |line| {
+        crate::transcript::turns::has(line, b"user.message")
+            || crate::transcript::turns::has(line, b"assistant.turn_start")
+    },
+};

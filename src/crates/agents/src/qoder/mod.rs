@@ -36,6 +36,7 @@ pub static QODER: Agent = Agent {
     channel: None,
     program: None,
     replies: None,
+    turns: None,
     sources: crate::everywhere(&[]),
     discovery: &QODER_DISCOVERY,
 };
@@ -49,6 +50,7 @@ pub static QODER_CN: Agent = Agent {
     channel: None,
     program: None,
     replies: None,
+    turns: None,
     sources: crate::everywhere(&[]),
     discovery: &QODER_CN_DISCOVERY,
 };
@@ -62,6 +64,7 @@ pub static QODER_WORK: Agent = Agent {
     channel: None,
     program: None,
     replies: None,
+    turns: None,
     sources: crate::everywhere(&[]),
     discovery: &QODER_WORK_DISCOVERY,
 };

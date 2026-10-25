@@ -86,7 +86,7 @@ pub struct AgentHudCore {
     parser_cache: ParserCache,
     archives: compressed::Archives,
     conversations: compressed::Archives,
-    conversation_context: conversation::Context,
+    conversation_context: conversation::Contexts,
     sessions_revision: u64,
     sessions_fingerprint: Option<u64>,
     /// What the session fingerprint was last worked out from, and when.
@@ -204,7 +204,7 @@ impl AgentHudCore {
             parser_cache: ParserCache::default(),
             archives: compressed::Archives::default(),
             conversations: compressed::Archives::default(),
-            conversation_context: conversation::Context::default(),
+            conversation_context: conversation::Contexts::default(),
             sessions_revision: 0,
             sessions_fingerprint: None,
             sessions_checked: None,

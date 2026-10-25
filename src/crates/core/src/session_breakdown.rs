@@ -990,6 +990,66 @@ mod tests {
     }
 
     #[test]
+    fn a_claude_page_that_begins_inside_a_turn_keeps_that_turn() {
+        // Claude Code names the turn only on the prompt line: replies, tool
+        // calls and their results carry no prompt id.
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join(".claude/projects/p");
+        fs::create_dir_all(&root).unwrap();
+        let t = Utc::now().timestamp_millis() - 3_600_000;
+        let session = |id: &str, prompt: &str, words: &[&str]| {
+            let mut rows = vec![
+                json!({"type":"user","sessionId":id,"timestamp":iso(t),"uuid":"line-0","promptId":prompt,"message":{"role":"user","content":"Fix the build"}}),
+            ];
+            for (n, said) in words.iter().enumerate() {
+                let at = t + 1_000 * (n as i64 + 1);
+                rows.push(json!({"type":"assistant","sessionId":id,"timestamp":iso(at),"uuid":format!("a{n}"),"message":{"id":format!("m{n}"),"model":"claude-opus-4-5","role":"assistant","content":[{"type":"text","text":said},{"type":"tool_use","id":format!("tu{n}"),"name":"Bash","input":{}}],"usage":{"input_tokens":10,"output_tokens":20}}}));
+                rows.push(json!({"type":"user","sessionId":id,"timestamp":iso(at + 500),"uuid":format!("r{n}"),"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":format!("tu{n}"),"content":"ok"}]}}));
+            }
+            fs::write(root.join(format!("{id}.jsonl")), lines(&rows)).unwrap();
+        };
+        let a = "11111111-2222-3333-4444-aaaaaaaaaaaa";
+        let b = "11111111-2222-3333-4444-bbbbbbbbbbbb";
+        session(a, "prompt-a", &["One.", "Two.", "Three."]);
+        session(b, "prompt-b", &["Other."]);
+        let turns_of = |detail: &Value| {
+            detail["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| (m["turnId"].clone(), m["turnStartedAt"].clone()))
+                .collect::<Vec<_>>()
+        };
+        let mut core = core(temp.path());
+        core.request("snapshot", json!({})).unwrap();
+        let first = core
+            .request("session_detail", json!({"id": a, "messageLimit": 2}))
+            .unwrap();
+        let cursor = first["nextMessageCursor"].as_u64().unwrap();
+        // Another session's page between two pages of this one.
+        core.request("session_detail", json!({"id": b, "messageTail": true}))
+            .unwrap();
+        let next = core
+            .request("session_detail", json!({"id": a, "messageCursor": cursor}))
+            .unwrap();
+        let started = json!(iso(t));
+        assert!(!turns_of(&next).is_empty());
+        assert!(
+            turns_of(&next)
+                .iter()
+                .all(|turn| *turn == (json!("prompt-a"), started.clone())),
+            "the rest of the turn stays in it: {next:#}"
+        );
+        // A new engine, as after a launch, remembers nothing and looks back.
+        let mut fresh = super::tests::core(temp.path());
+        fresh.request("snapshot", json!({})).unwrap();
+        let again = fresh
+            .request("session_detail", json!({"id": a, "messageCursor": cursor}))
+            .unwrap();
+        assert_eq!(turns_of(&again), turns_of(&next), "{again:#}");
+    }
+
+    #[test]
     fn a_claude_turn_is_its_prompt_id_and_request_copies_are_skipped() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join(".claude/projects/p");

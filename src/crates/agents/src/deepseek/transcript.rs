@@ -205,3 +205,21 @@ impl Log {
         );
     }
 }
+
+/// A DeepSeek turn starts at its `turn/start` line.
+pub static TURNS: crate::transcript::turns::Turns = crate::transcript::turns::Turns {
+    start: |value| {
+        if value["type"] != "turn/start" {
+            return None;
+        }
+        let turn = value["data"]["turn"]
+            .as_i64()
+            .map(|n| n.to_string())
+            .or_else(|| value["data"]["turn"].as_str().map(str::to_owned))?;
+        Some(crate::transcript::turns::TurnStart::whole(
+            Some(turn),
+            value.get("time").or_else(|| value.get("timestamp")),
+        ))
+    },
+    may_name: |line| crate::transcript::turns::has(line, b"turn/start"),
+};

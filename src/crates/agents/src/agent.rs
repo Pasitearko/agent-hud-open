@@ -28,6 +28,9 @@ pub struct Agent {
     pub program: Option<&'static str>,
     /// How words reach its sessions, when they can.
     pub replies: Option<&'static Replies>,
+    /// Which lines of its transcript start its turns, when it states its
+    /// own rule; others are read with `transcript::turns::SHARED`.
+    pub turns: Option<&'static crate::transcript::turns::Turns>,
     /// Where the engine reads its sessions, on each OS.
     pub sources: PerOs<&'static [Source]>,
     /// How Agent HUD tells it is installed, configured or used here.

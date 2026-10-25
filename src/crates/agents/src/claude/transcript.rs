@@ -6,6 +6,7 @@ use crate::{
         Turn, Work,
     },
     transcript::metering,
+    transcript::turns::{has, TurnStart, Turns},
     Log, RecentCall, Usage,
 };
 use serde_json::{json, Value};
@@ -57,6 +58,41 @@ pub fn claude_prompt(value: &Value) -> bool {
         && !text
             .is_some_and(|s| s.starts_with("<command-name>") || s.starts_with("<local-command-"))
 }
+
+/// Claude Code's note that the user stopped a turn: a user message that starts
+/// no turn of its own and is not the user's words.
+pub fn interrupted(value: &Value) -> bool {
+    let content = &value["message"]["content"];
+    content
+        .as_str()
+        .is_some_and(|s| s.starts_with("[Request interrupted"))
+        || content.as_array().is_some_and(|parts| {
+            parts.iter().any(|part| {
+                part["text"]
+                    .as_str()
+                    .is_some_and(|s| s.starts_with("[Request interrupted"))
+            })
+        })
+}
+
+/// A Claude turn starts at the user's prompt; replies, tool calls and their
+/// results name no turn, so a page that begins inside a turn looks back to it.
+pub static TURNS: Turns = Turns {
+    start: |value| {
+        if !claude_prompt(value) || interrupted(value) {
+            return None;
+        }
+        let turn = claude_turn(value)
+            .or_else(|| value["id"].as_str())
+            .map(str::to_owned);
+        Some(TurnStart::whole(
+            turn,
+            value.get("timestamp").or_else(|| value.get("time")),
+        ))
+    },
+    // A tool result is a user line too, and never a prompt.
+    may_name: |line| has(line, b"\"user\"") && !has(line, b"\"tool_use_id\""),
+};
 
 pub fn uuid(value: &str) -> bool {
     value.len() == 36

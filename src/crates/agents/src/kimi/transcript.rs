@@ -137,3 +137,18 @@ impl Log {
         }
     }
 }
+
+/// A Kimi turn starts at the loop's `step.begin` event.
+pub static TURNS: crate::transcript::turns::Turns = crate::transcript::turns::Turns {
+    start: |value| {
+        if value["type"] != "context.append_loop_event" || value["event"]["type"] != "step.begin" {
+            return None;
+        }
+        let id = value["event"]["turnId"].as_str()?;
+        Some(crate::transcript::turns::TurnStart::whole(
+            Some(id.to_owned()),
+            value.get("time"),
+        ))
+    },
+    may_name: |line| crate::transcript::turns::has(line, b"step.begin"),
+};
