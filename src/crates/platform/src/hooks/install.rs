@@ -194,9 +194,8 @@ pub fn apply_plan(plan: &InstallPlan) -> Result<bool, String> {
             "Client settings changed after this hook plan was prepared; prepare a new plan.",
         ));
     }
-    let mut bytes =
-        serde_json::to_vec_pretty(&plan.updated).map_err(|_| "Hook settings could not be saved")?;
-    bytes.push(b'\n');
+    let bytes = crate::json_text::rewrite(plan.original.as_deref(), &plan.updated)
+        .map_err(|_| "Hook settings could not be saved")?;
     write_contents(&plan.target, Some(&bytes))?;
     Ok(true)
 }

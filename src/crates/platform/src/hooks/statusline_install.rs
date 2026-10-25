@@ -269,9 +269,8 @@ fn plan_file(
     } else {
         return Ok(None);
     }
-    let mut bytes =
-        serde_json::to_vec_pretty(&updated).map_err(|_| "CLI settings could not be encoded")?;
-    bytes.push(b'\n');
+    let bytes = crate::json_text::rewrite(original.as_deref(), &Value::Object(updated))
+        .map_err(|_| "CLI settings could not be encoded")?;
     Ok(Some(FileChange {
         configuration: path.to_owned(),
         target,
