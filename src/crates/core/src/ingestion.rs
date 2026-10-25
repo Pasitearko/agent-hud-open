@@ -508,7 +508,7 @@ impl AgentHudCore {
             let active = if self
                 .reads
                 .active_checked_at
-                .is_none_or(|last| last.elapsed() >= Duration::from_secs(5))
+                .is_none_or(|last| last.elapsed() >= Duration::from_secs(3))
             {
                 self.reads.active_checked_at = Some(Instant::now());
                 self.active_logs()

@@ -8,8 +8,11 @@ The behavioral reference is the Swift application (`UsageCollector.swift`,
   per-screen HUD webviews subscribe to its snapshot stream and bootstrap from its
   cached projection. No native webview owns a polling timer or another runtime.
 - Native file callbacks report changed paths and wake that serial collector. File
-  events share the original 2-second read spacing; a 5-second check of up to 64
-  recently active logs covers long-lived descriptors. Initial reads, lost events,
+  events share the original 2-second read spacing; a 3-second stat-only check of up
+  to 64 recently active logs covers long-lived descriptors, whose writes macOS reports
+  tens of seconds late. A log read before its first line was whole has no event yet and
+  counts as active by its last write. Requests and hook reminders do not postpone the
+  check. Initial reads, lost events,
   unavailable watches and a 300-second reconciliation list all roots.
 - Only changed, outdated or unfinished files last written within the ledger's
   31-day retention enter the incremental read queue; an older file is never

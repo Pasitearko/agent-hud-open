@@ -330,7 +330,7 @@ impl Service {
                 // A pass reads what changed. Between passes, a stat-only look
                 // every LOOK checks the logs clients hold open, whose writes
                 // can reach the watcher late, and sends the windows the time.
-                const LOOK: Duration = Duration::from_secs(5);
+                const LOOK: Duration = Duration::from_secs(3);
                 // File events and account readings are read at most this often
                 // (UsageCollector's 2 s read spacing).
                 const SPACING: Duration = Duration::from_secs(2);
@@ -442,7 +442,13 @@ impl Service {
                             serde_json::json!({ "changesOnly": changes_only }),
                         );
                     }
-                    look_at = Instant::now() + LOOK;
+                    // Only a pass or a look checks the logs clients hold open.
+                    // Requests and hooks' reminders arrive every few seconds
+                    // while other sessions run, and must not keep postponing
+                    // it (a VS Code Codex rollout waited 23 s, 2026-10-26).
+                    if method == Some("snapshot") || matches!(turn, Turn::Look) {
+                        look_at = Instant::now() + LOOK;
+                    }
                     reminder_at = backend.runtime.next_log_reminder();
                     due_at = backend.runtime.next_snapshot_due();
                     pass_at = backend.runtime.next_pass_due();

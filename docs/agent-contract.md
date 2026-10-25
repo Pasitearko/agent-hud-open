@@ -134,7 +134,7 @@ pub enum Change {
   - the account scheduler;
   - the request owner;
   - settings.
-- **A pass does only what its changes call for.** It reads the logs named and applies the reading. Session rows are reused while no session input changed, and pages are told only when the snapshot changed. Between passes, a stat-only look every 5 s checks the logs held open; with no change there is no pass and no render.
+- **A pass does only what its changes call for.** It reads the logs named and applies the reading. Session rows are reused while no session input changed, and pages are told only when the snapshot changed. Between passes, a stat-only look every 3 s checks the logs held open (a session read before its first line was whole counts, by its last write); with no change there is no pass and no render.
 - **Time-based changes are deadlines.** Each part says when its next change falls due:
   - a session going quiet or abandoned;
   - a request expiring;
