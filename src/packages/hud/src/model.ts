@@ -233,17 +233,10 @@ export function sourcesForMark(snapshot: Snapshot, mark: string): string[] {
 export function quotaAccountKey(row: Quota): string {
   return row.accountId ?? row.account ?? "unassigned";
 }
-export function quotaRowKey(row: Quota): string {
-  return row.legacyWindowId ?? row.id;
-}
-export function quotaRowMatches(row: Quota, key: string): boolean {
-  return (
-    row.id === key ||
-    row.legacyWindowId === key ||
-    !!(
-      row.accountId &&
-      row.legacyWindowId?.startsWith(`${row.accountId}/`) &&
-      row.legacyWindowId.slice(row.accountId.length + 1) === key
-    )
-  );
-}
+export {
+  inRowOrder,
+  quotaRowHidden,
+  quotaRowKey,
+  quotaRowMatches,
+  withRowShown,
+} from "./quota-rows.ts";

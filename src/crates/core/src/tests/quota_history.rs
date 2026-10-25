@@ -74,3 +74,28 @@ fn opens_samples_land_on_the_same_cursor_and_grok_bot_windows() {
         .unwrap();
     assert_eq!(all, 2, "windows no row names stay behind");
 }
+
+#[test]
+fn snapshot_rows_keep_the_window_id_layouts_name_them_by() {
+    let temp = tempfile::tempdir().unwrap();
+    let account = format!("account:{}", "a".repeat(64));
+    let mut core = fixture(temp.path());
+    core.set_account_projection(AccountProjection {
+        quotas: vec![
+            json!({"id":"claude:u:claude-weekly-fable","vendor":"claude",
+            "usedPercent":0.0,"accountId":account,
+            "legacyWindowId":format!("{account}/claude-weekly-fable"),
+            "consumerSource":"claude","modelFamilies":["fable"]}),
+        ],
+        ..Default::default()
+    });
+    let snapshot = core.request("snapshot", json!({})).unwrap();
+    let row = &snapshot["quotas"][0];
+    assert_eq!(
+        row["legacyWindowId"],
+        format!("{account}/claude-weekly-fable"),
+        "a layout carried over from the Swift app hides this row by it"
+    );
+    assert!(row["consumerSource"].is_null());
+    assert!(row["modelFamilies"].is_null());
+}

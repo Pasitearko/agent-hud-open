@@ -552,8 +552,10 @@ impl crate::AgentHudCore {
                         self.meters.samples.as_ref().unwrap_or(&Default::default()),
                     );
                 }
+                // legacyWindowId stays: panel layouts, Settings and get_hud name a
+                // row by it (src/packages/hud/src/quota-rows.ts).
                 if let Some(object) = row.as_object_mut() {
-                    for key in ["legacyWindowId", "consumerSource", "modelFamilies"] {
+                    for key in ["consumerSource", "modelFamilies"] {
                         object.remove(key);
                     }
                 }

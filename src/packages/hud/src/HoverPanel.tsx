@@ -17,9 +17,10 @@ import type { Quota, Snapshot } from "@agent-hud/protocol";
 import { Button } from "@agent-hud/ui/components/button";
 import {
   defaultHUDConfig,
+  inRowOrder,
   quotaAccountKey,
+  quotaRowHidden,
   quotaRowKey,
-  quotaRowMatches,
   vendorKey,
   type HUDConfig,
   type HUDUpdateNotice,
@@ -144,24 +145,20 @@ export const SourceHoverPanel = memo(function SourceHoverPanel({
         content: (
           <SourceProviderBlock
             vendor={vendor}
-            rows={inPanelOrder(
-              (rowsByVendor.get(vendor) ?? [])
-                .filter((row) => {
-                  const block = config.panelLayout.blocks?.[vendor];
-                  return (
-                    !(block?.hiddenRows ?? []).some((id) =>
-                      quotaRowMatches(row, id),
-                    ) &&
-                    !(block?.hiddenAccounts ?? []).includes(
-                      quotaAccountKey(row),
-                    ) &&
-                    (!block?.accounts?.length ||
-                      block.accounts.includes(quotaAccountKey(row)))
-                  );
-                })
-                .map((row) => ({ ...row, key: quotaRowKey(row) })),
+            rows={inRowOrder(
+              (rowsByVendor.get(vendor) ?? []).filter((row) => {
+                const block = config.panelLayout.blocks?.[vendor];
+                return (
+                  !quotaRowHidden(row, block?.hiddenRows ?? []) &&
+                  !(block?.hiddenAccounts ?? []).includes(
+                    quotaAccountKey(row),
+                  ) &&
+                  (!block?.accounts?.length ||
+                    block.accounts.includes(quotaAccountKey(row)))
+                );
+              }),
               config.panelLayout.blocks?.[vendor]?.rows ?? [],
-            )}
+            ).map((row) => ({ ...row, key: quotaRowKey(row) }))}
             layout={config.panelLayout.blocks?.[vendor]}
             snapshot={snapshot}
             active={active}

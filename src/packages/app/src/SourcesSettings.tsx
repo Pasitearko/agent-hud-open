@@ -15,9 +15,12 @@ import AntigravityAccounts from "./settings/AntigravityAccounts";
 import { HUDArtwork as HUDLogo } from "@agent-hud/hud/HUDArtwork";
 import {
   vendorKey,
+  inRowOrder,
   quotaAccountKey,
+  quotaRowHidden,
   quotaRowKey,
   quotaRowMatches,
+  withRowShown,
 } from "@agent-hud/hud/model";
 import { snapshotLanguage, quotaPercentLabel } from "@agent-hud/ui/format";
 interface Props {
@@ -137,12 +140,10 @@ export default function SourcesSettings({
     ...(layout.order ?? []),
     ...availableKeys.filter((id) => !(layout.order ?? []).includes(id)),
   ];
-  const uniqueWindowKeys = [...new Set(windows.map(quotaRowKey))];
+  // Each row once, by the key a layout writes for it, wherever the layout's
+  // order names it by any of its keys.
   const windowOrder = [
-    ...(block.rows ?? []).filter((id) =>
-      windows.some((q) => quotaRowMatches(q, id)),
-    ),
-    ...uniqueWindowKeys.filter((id) => !(block.rows ?? []).includes(id)),
+    ...new Set(inRowOrder(windows, block.rows ?? []).map(quotaRowKey)),
   ];
   return (
     <div
@@ -434,17 +435,17 @@ export default function SourcesSettings({
                           </span>
                           <Switch
                             checked={
-                              !(block.hiddenRows ?? []).includes(
-                                quotaRowKey(window),
-                              )
+                              !quotaRowHidden(window, block.hiddenRows ?? [])
                             }
                             disabled={pending}
                             aria-label={t("Show quota window", "显示额度窗口")}
                             onCheckedChange={(show) =>
                               void changeBlock({
                                 hiddenRows: show
-                                  ? (block.hiddenRows ?? []).filter(
-                                      (id) => id !== quotaRowKey(window),
+                                  ? withRowShown(
+                                      block.hiddenRows ?? [],
+                                      window,
+                                      windows,
                                     )
                                   : [
                                       ...new Set([
