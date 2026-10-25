@@ -133,6 +133,9 @@ pub(crate) fn repair_on_launch(app: &tauri::AppHandle) {
 
 /// Installs the plugin again from `folder` when Claude Code lists it from
 /// another folder and its command line is here. Returns whether it did.
+/// When Claude Code runs it from `folder` already, rewrites what this
+/// version of the app changed in its files, which sessions read when they
+/// start.
 fn repair(
     channel: &ClaudeChannel,
     folder: &Path,
@@ -140,10 +143,11 @@ fn repair(
     claude_config: &Path,
     home: &Path,
 ) -> Result<bool, String> {
-    if executable.is_none()
-        || !plugin::installed(claude_config)
-        || plugin::installed_from(claude_config, folder)
-    {
+    if plugin::installed_from(claude_config, folder) {
+        channel.prepare_plugin(folder)?;
+        return Ok(false);
+    }
+    if executable.is_none() || !plugin::installed(claude_config) {
         return Ok(false);
     }
     install(channel, folder, executable, claude_config, home).map(|()| true)
@@ -373,6 +377,32 @@ mod tests {
         );
         assert!(!repair(&channel, &folder, Some(&claude), &config, root).unwrap());
         assert!(!root.join("calls").exists());
+    }
+
+    #[test]
+    fn the_launch_repair_brings_an_older_copy_of_our_plugin_up_to_date() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let config = root.join("claude-config");
+        let channel = ClaudeChannel::new(root.join("channel"));
+        let folder = root.join("plugin");
+        let claude = fake_claude(root, &config);
+        listed_from(&config, &folder);
+        install(&channel, &folder, Some(&claude), &config, root).unwrap();
+        let script = folder.join("hooks/register.ts");
+        let current = fs::read(&script).unwrap();
+        fs::write(&script, "// another version").unwrap();
+
+        assert!(!repair(&channel, &folder, None, &config, root).unwrap());
+        assert_eq!(
+            fs::read(&script).unwrap(),
+            current,
+            "the files are this app's again"
+        );
+        assert!(
+            !root.join("calls").exists(),
+            "Claude Code was asked nothing"
+        );
     }
 
     #[test]
