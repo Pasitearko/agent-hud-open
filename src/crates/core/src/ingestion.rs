@@ -81,7 +81,7 @@ pub(crate) fn read_lines(
     requests: &requests::Requests,
     errors: &mut Vec<String>,
     archive: bool,
-    mut conversation: Option<&mut Vec<crate::conversation_feed::Fact>>,
+    mut conversation: Option<&mut crate::conversation_collect::Gathered>,
 ) -> std::io::Result<()> {
     let mut page = 2 * 1024 * 1024u64;
     log.waiting_for_more = false;
@@ -689,8 +689,11 @@ impl AgentHudCore {
             }
             // What this read holds of the session's conversation, for the
             // store that keeps it; none is gathered without one.
-            let mut conversation =
-                (self.conversation_sink.is_some() && source != "codex-index").then(Vec::new);
+            let mut conversation = (self.conversation_sink.is_some() && source != "codex-index")
+                .then(|| crate::conversation_collect::Gathered {
+                    facts: Vec::new(),
+                    awaiting: self.conversation_awaiting.get(&path).cloned(),
+                });
             let line_start = log.offset;
             let result = (|| -> std::io::Result<()> {
                 if archive {
@@ -899,8 +902,13 @@ impl AgentHudCore {
             let Some(facts_changed) = committed else {
                 continue;
             };
-            if let (Some(sink), Some(facts)) = (self.conversation_sink.clone(), conversation) {
-                if let Err(error) = self.deliver_conversation(sink, &path, &log, line_start, facts)
+            if let (Some(sink), Some(gathered)) = (self.conversation_sink.clone(), conversation) {
+                match gathered.awaiting {
+                    Some(turn) => self.conversation_awaiting.insert(path.clone(), turn),
+                    None => self.conversation_awaiting.remove(&path),
+                };
+                if let Err(error) =
+                    self.deliver_conversation(sink, &path, &log, line_start, gathered.facts)
                 {
                     errors.push(error);
                 }

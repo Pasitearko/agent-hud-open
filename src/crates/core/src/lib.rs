@@ -141,6 +141,9 @@ pub struct AgentHudCore {
     /// moved on by each delivery; and the spans it lacks, to read again.
     conversation_positions: Option<HashMap<PathBuf, u64>>,
     conversation_gaps: BTreeMap<PathBuf, (u64, u64)>,
+    /// Each log's turn that started without the user's words, until its
+    /// first prompt line names them (`conversation_collect::Gathered`).
+    conversation_awaiting: HashMap<PathBuf, String>,
     workbuddy_metering: agent_hud_agents::buddy::transcript::WorkBuddyMeteringReading,
     /// What each listed session's row shows of its breakdown, until its logs move.
     session_rows: session_breakdown::SessionRows,
@@ -244,6 +247,7 @@ impl AgentHudCore {
             conversation_sink: None,
             conversation_positions: None,
             conversation_gaps: BTreeMap::new(),
+            conversation_awaiting: HashMap::new(),
             workbuddy_metering: Default::default(),
             session_rows: Default::default(),
         }

@@ -25,31 +25,104 @@ pub(crate) fn before(log: &Log) -> Before {
     }
 }
 
+/// What a read of one log gathers: its facts, and the turn that started
+/// without the user's words, whose first prompt line then holds them (Codex
+/// starts a turn on `task_started`, a line before its prompt). That turn is
+/// kept between reads of the log.
+#[derive(Default)]
+pub(crate) struct Gathered {
+    pub facts: Vec<Fact>,
+    pub awaiting: Option<String>,
+}
+
+impl Gathered {
+    /// A turn's start, with the prompt its first line holds, if any.
+    pub(crate) fn started(&mut self, turn: String, first: Option<&LineItem>, at_ms: Option<i64>) {
+        let prompt = first.and_then(|item| item.text.clone());
+        self.awaiting = prompt.is_none().then(|| turn.clone());
+        self.facts.push(Fact::TurnStarted {
+            turn,
+            prompt,
+            origin: first.and_then(|item| item.origin.clone()),
+            at_ms,
+        });
+    }
+
+    /// The entries of one line of `turn`; `starts` when the line started it.
+    pub(crate) fn entries(
+        &mut self,
+        lines: &[LineItem],
+        turn: &Option<String>,
+        offset: u64,
+        at_ms: Option<i64>,
+        starts: bool,
+    ) {
+        for (index, line) in lines.iter().enumerate() {
+            if line.is_prompt && !starts && turn.is_some() && self.awaiting == *turn {
+                self.awaiting = None;
+                self.name_prompt(turn.clone().unwrap_or_default(), line);
+                continue;
+            }
+            if let Some(item) = item(line, turn, offset, index, at_ms, starts) {
+                self.facts.push(Fact::Item(item));
+            }
+        }
+    }
+
+    /// The words of a turn that started without them: its start in this read
+    /// takes them, or the turn is named again with them.
+    fn name_prompt(&mut self, turn: String, line: &LineItem) {
+        let start = self.facts.iter_mut().rev().find_map(|fact| match fact {
+            Fact::TurnStarted {
+                turn: started,
+                prompt,
+                origin,
+                ..
+            } if *started == turn => Some((prompt, origin)),
+            _ => None,
+        });
+        match start {
+            Some((prompt, origin)) => {
+                *prompt = line.text.clone();
+                if origin.is_none() {
+                    origin.clone_from(&line.origin);
+                }
+            }
+            None => self.facts.push(Fact::TurnStarted {
+                turn,
+                prompt: line.text.clone(),
+                origin: line.origin.clone(),
+                at_ms: None,
+            }),
+        }
+    }
+}
+
 /// What the line at `offset`, just parsed into `log`, adds to its
 /// conversation.
-pub(crate) fn line(log: &Log, value: &Value, offset: u64, before: &Before, facts: &mut Vec<Fact>) {
+pub(crate) fn line(
+    log: &Log,
+    value: &Value,
+    offset: u64,
+    before: &Before,
+    gathered: &mut Gathered,
+) {
     let now = log.live.turns.back();
     let turn = now.and_then(|turn| turn.id.clone());
     let at_ms = timestamp(value);
     let lines = (items::of(&log.source).read)(value, offset);
     let starts = turn.is_some() && turn != before.turn;
     if starts {
-        let first = lines.iter().find(|item| item.is_prompt);
-        facts.push(Fact::TurnStarted {
-            turn: turn.clone().unwrap_or_default(),
-            prompt: first.and_then(|item| item.text.clone()),
-            origin: first.and_then(|item| item.origin.clone()),
-            at_ms: now.and_then(|turn| turn.started).or(at_ms),
-        });
+        gathered.started(
+            turn.clone().unwrap_or_default(),
+            lines.iter().find(|item| item.is_prompt),
+            now.and_then(|turn| turn.started).or(at_ms),
+        );
     }
-    for (index, line) in lines.iter().enumerate() {
-        if let Some(item) = item(line, &turn, offset, index, at_ms, starts) {
-            facts.push(Fact::Item(item));
-        }
-    }
+    gathered.entries(&lines, &turn, offset, at_ms, starts);
     let ended = now.is_some_and(|now| !now.running && now.id == before.turn && before.running);
     if let (true, Some(turn)) = (ended, turn) {
-        facts.push(Fact::TurnEnded {
+        gathered.facts.push(Fact::TurnEnded {
             turn,
             at_ms,
             outcome: now.and_then(|now| now.outcome.clone()),

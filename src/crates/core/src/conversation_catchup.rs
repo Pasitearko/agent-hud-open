@@ -184,7 +184,7 @@ fn replay(
     }
     let turns = agent_hud_agents::transcript::turns::of(source);
     let rule = agent_hud_agents::transcript::items::of(source);
-    let mut facts = Vec::new();
+    let mut gathered = crate::conversation_collect::Gathered::default();
     let mut turn: Option<String> = None;
     let mut line = Vec::new();
     loop {
@@ -216,7 +216,7 @@ fn replay(
             let begins = begun.whole || begun.started.is_some() || turn.is_none();
             if begins && begun.turn.is_some() && begun.turn != turn {
                 if let Some(ended) = turn.take() {
-                    facts.push(Fact::TurnEnded {
+                    gathered.facts.push(Fact::TurnEnded {
                         turn: ended,
                         at_ms,
                         outcome: None,
@@ -224,37 +224,24 @@ fn replay(
                 }
                 turn = begun.turn.clone();
                 starts = true;
-                facts.push(Fact::TurnStarted {
-                    turn: turn.clone().unwrap_or_default(),
-                    prompt: entries
-                        .iter()
-                        .find(|entry| entry.is_prompt)
-                        .and_then(|entry| entry.text.clone()),
-                    origin: entries
-                        .iter()
-                        .find(|entry| entry.is_prompt)
-                        .and_then(|entry| entry.origin.clone()),
+                gathered.started(
+                    turn.clone().unwrap_or_default(),
+                    entries.iter().find(|entry| entry.is_prompt),
                     at_ms,
-                });
+                );
             }
         }
-        for (index, entry) in entries.iter().enumerate() {
-            if let Some(item) =
-                crate::conversation_collect::item(entry, &turn, here, index, at_ms, starts)
-            {
-                facts.push(Fact::Item(item));
-            }
-        }
+        gathered.entries(&entries, &turn, here, at_ms, starts);
     }
     let last = log.live.turns.back();
     if let (Some(open), Some(last)) = (&turn, last) {
         if last.id.as_deref() == Some(open) && !last.running {
-            facts.push(Fact::TurnEnded {
+            gathered.facts.push(Fact::TurnEnded {
                 turn: open.clone(),
                 at_ms: None,
                 outcome: last.outcome.clone(),
             });
         }
     }
-    Ok(facts)
+    Ok(gathered.facts)
 }

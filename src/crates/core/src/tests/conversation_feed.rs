@@ -326,3 +326,61 @@ fn a_store_first_meeting_a_log_through_new_lines_still_gets_its_earlier_turns() 
         "{items:#?}"
     );
 }
+
+#[test]
+fn a_codex_turn_takes_the_prompt_that_follows_its_start() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().join(".codex/sessions/2026/10/25");
+    std::fs::create_dir_all(&root).unwrap();
+    let thread = "44444444-4444-4444-8444-444444444444";
+    let path = root.join(format!("rollout-2026-10-25T10-00-00-{thread}.jsonl"));
+    let t = Utc::now().timestamp_millis() - 600_000;
+    let user = |at: i64, words: &str| json!({"timestamp":iso(at),"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":words}]}});
+    write(
+        &path,
+        &[
+            json!({"timestamp":iso(t),"type":"session_meta","payload":{"id":thread,"timestamp":iso(t),"cwd":"/w/repo","source":"cli","originator":"codex_cli_rs"}}),
+            json!({"timestamp":iso(t),"type":"turn_context","payload":{"model":"gpt-5","turn_id":"t1"}}),
+            // Codex starts the turn before it writes the prompt; this read
+            // ends between the two.
+            json!({"timestamp":iso(t + 100),"type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}),
+        ],
+        false,
+    );
+    let store = Arc::new(Store::default());
+    let mut core = fixture(home.path());
+    core.set_conversation_sink(Some(store.clone()));
+    core.request("snapshot", json!({})).unwrap();
+    let first = store.take();
+    write(
+        &path,
+        &[
+            user(t + 200, "Fix the build"),
+            json!({"timestamp":iso(t + 1_000),"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Looking."}]}}),
+            // A steer: the user's words added to the running turn.
+            user(t + 2_000, "also run the tests"),
+        ],
+        true,
+    );
+    core.request("snapshot", json!({})).unwrap();
+    let facts = [first, store.take()].concat();
+    let prompts = facts
+        .iter()
+        .filter_map(|fact| match fact {
+            Fact::TurnStarted { turn, prompt, .. } if turn == "t1" => prompt.clone(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(prompts, vec!["Fix the build".to_owned()], "{facts:#?}");
+    assert_eq!(
+        texts(&facts)
+            .into_iter()
+            .map(|(role, _, text, _)| (role, text))
+            .collect::<Vec<_>>(),
+        vec![
+            (Role::Assistant, "Looking.".to_owned()),
+            (Role::User, "also run the tests".to_owned()),
+        ],
+        "the prompt is the turn's, not an item; a steer is the user's words"
+    );
+}
