@@ -3,7 +3,35 @@ use sha2::Digest;
 use std::{
     collections::{BTreeMap, VecDeque},
     path::PathBuf,
+    sync::{Arc, Condvar, Mutex},
+    time::Duration,
 };
+/// Counts the cache's commits so the event streams wait for the next one
+/// instead of polling it.
+#[derive(Default)]
+pub struct Signal {
+    count: Mutex<u64>,
+    moved: Condvar,
+}
+impl Signal {
+    pub fn bump(&self) {
+        *self.count.lock().unwrap_or_else(|p| p.into_inner()) += 1;
+        self.moved.notify_all();
+    }
+    pub fn current(&self) -> u64 {
+        *self.count.lock().unwrap_or_else(|p| p.into_inner())
+    }
+    /// Waits until the count passes `seen` or `timeout` runs out, and returns
+    /// the count then.
+    pub fn wait(&self, seen: u64, timeout: Duration) -> u64 {
+        let count = self.count.lock().unwrap_or_else(|p| p.into_inner());
+        let (count, _) = self
+            .moved
+            .wait_timeout_while(count, timeout, |count| *count == seen)
+            .unwrap_or_else(|p| p.into_inner());
+        *count
+    }
+}
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot<R> {
@@ -77,6 +105,7 @@ pub struct SnapshotCache<R> {
     version: u64,
     oldest: u64,
     body: Option<Vec<u8>>,
+    signal: Arc<Signal>,
 }
 impl<R: Record> SnapshotCache<R> {
     pub fn new(device: String, name: String, file: PathBuf) -> Result<Self> {
@@ -110,7 +139,12 @@ impl<R: Record> SnapshotCache<R> {
             version: 0,
             oldest: 0,
             body: None,
+            signal: Arc::default(),
         })
+    }
+    /// Moves on every commit and clear.
+    pub fn signal(&self) -> Arc<Signal> {
+        self.signal.clone()
     }
     /// Publishes `records` as the next version when any of them differs from
     /// what is published. An unchanged record keeps the copy, JSON and
@@ -286,6 +320,7 @@ impl<R: Record> SnapshotCache<R> {
             cursor,
         });
         self.body = None;
+        self.signal.bump();
         Ok(())
     }
     /// The snapshot as served, encoded once per version on first request.
@@ -355,6 +390,7 @@ impl<R: Record> SnapshotCache<R> {
         self.bases.clear();
         self.checkpoints.clear();
         self.body = None;
+        self.signal.bump();
     }
 }
 

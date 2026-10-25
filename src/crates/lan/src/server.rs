@@ -1,7 +1,7 @@
 //! Explicit TLS listener lifecycle. Construction is inert; start binds only when
 //! the host's LAN switch is on. No discovery/client polling is added.
 use super::{
-    cache::SnapshotCache,
+    cache::{Signal, SnapshotCache},
     credentials::{Authorization, Credentials},
     http::{encode_body, response, Parse, Request},
     identity::Identity,
@@ -41,6 +41,8 @@ struct Shared<R> {
     name: String,
     credentials: Mutex<Credentials>,
     cache: Arc<Mutex<SnapshotCache<R>>>,
+    /// The cache's commits, which wake the event streams.
+    signal: Arc<Signal>,
     identity: Identity,
     endpoint: Mutex<Option<String>>,
     /// Overlay (Tailscale) endpoints a phone may try after `endpoint`.
@@ -68,11 +70,13 @@ impl<R: Record + Send + 'static> LanServer<R> {
         identity: Identity,
         extension: Extension,
     ) -> Self {
+        let signal = cache.lock().unwrap_or_else(|p| p.into_inner()).signal();
         Self {
             shared: Arc::new(Shared {
                 device,
                 name,
                 credentials: Mutex::new(credentials),
+                signal,
                 cache,
                 identity,
                 endpoint: Mutex::new(None),
@@ -199,6 +203,7 @@ impl<R: Record + Send + 'static> LanServer<R> {
     pub fn stop(&mut self, revoke: bool) -> Result<()> {
         self.shared.stop.store(true, Ordering::Release);
         self.shared.generation.fetch_add(1, Ordering::AcqRel);
+        self.shared.signal.bump();
         for socket in self
             .shared
             .sockets
@@ -361,6 +366,7 @@ impl<R: Record + Send + 'static> LanServer<R> {
     }
     fn disconnect(&self) {
         self.shared.generation.fetch_add(1, Ordering::AcqRel);
+        self.shared.signal.bump();
         self.shared
             .streams
             .lock()
@@ -570,7 +576,11 @@ fn connection<R: Record>(shared: &Shared<R>, socket: TcpStream, address: SocketA
         request.path == "/v1/events",
     );
     if request.path == "/v1/events" {
-        let mut revision = String::new();
+        let changes = request.streams_changes();
+        let mut told = Told {
+            revision: String::new(),
+            cursor: if changes { request.cursor() } else { None },
+        };
         let mut beat = Instant::now();
         stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: keep-alive\r\n\r\n").map_err(|_|"LAN stream header")?;
         loop {
@@ -585,24 +595,20 @@ fn connection<R: Record>(shared: &Shared<R>, socket: TcpStream, address: SocketA
             {
                 break;
             }
-            let latest = shared
-                .cache
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .head()
-                .map(|s| (s.revision.clone(), s.cursor.clone()));
-            if let Some((next, cursor)) = &latest {
-                if &revision != next {
-                    let event = format!(
-                        "event: revision\ndata: {}\n\n",
-                        json!({"revision":next,"cursor":cursor})
-                    );
-                    if stream.write_all(event.as_bytes()).is_err() || stream.flush().is_err() {
-                        break;
-                    }
-                    revision = next.clone();
-                    beat = Instant::now();
+            // Read before the head, so a commit after this look still wakes the wait.
+            let seen = shared.signal.current();
+            let (frame, latest) = {
+                let cache = shared.cache.lock().unwrap_or_else(|p| p.into_inner());
+                (
+                    next_frame(&cache, changes, &mut told),
+                    cache.head().map(|s| (s.revision.clone(), s.cursor.clone())),
+                )
+            };
+            if let Some(frame) = frame {
+                if stream.write_all(&frame).is_err() || stream.flush().is_err() {
+                    break;
                 }
+                beat = Instant::now();
             }
             if beat.elapsed() >= Duration::from_secs(30) {
                 let frame = if let Some((next, cursor)) = &latest {
@@ -618,7 +624,13 @@ fn connection<R: Record>(shared: &Shared<R>, socket: TcpStream, address: SocketA
                 }
                 beat = Instant::now();
             }
-            thread::sleep(Duration::from_millis(250));
+            // Until the next commit or heartbeat; at most 5 s, so a stopped server or
+            // a withdrawn credential is noticed even without one.
+            let until_beat = Duration::from_secs(30).saturating_sub(beat.elapsed());
+            shared.signal.wait(
+                seen,
+                until_beat.clamp(Duration::from_millis(10), Duration::from_secs(5)),
+            );
         }
         let online = {
             let mut streams = shared.streams.lock().unwrap_or_else(|p| p.into_inner());
@@ -679,6 +691,60 @@ fn connection<R: Record>(shared: &Shared<R>, socket: TcpStream, address: SocketA
         reply(200, &headers, &body)
     }
 }
+/// A stream's change sets larger than this go as a revision notice instead, so
+/// the phone fetches them from `/v1/changes`, compressed.
+const STREAMED_CHANGES_LIMIT: usize = 256 * 1024;
+
+/// What an event stream last told its phone.
+struct Told {
+    revision: String,
+    cursor: Option<crate::Cursor>,
+}
+
+/// The next frame of an event stream, once the published version moved past
+/// what it last told. A stream that takes changes gets the change set from
+/// where it stands (`changes`, its id the new cursor), or `reset` when the
+/// cache cannot go on from there; any other stream, or the first frame of one
+/// with no cursor, gets the revision notice (`revision`).
+fn next_frame<R: Record>(
+    cache: &SnapshotCache<R>,
+    changes: bool,
+    told: &mut Told,
+) -> Option<Vec<u8>> {
+    let head = cache.head()?;
+    if head.revision == told.revision {
+        return None;
+    }
+    let notice = |event: &str| {
+        format!(
+            "event: {event}\ndata: {}\n\n",
+            json!({"revision":head.revision,"cursor":head.cursor})
+        )
+        .into_bytes()
+    };
+    let frame = match told.cursor.as_ref().filter(|_| changes) {
+        None => notice("revision"),
+        Some(since) if *since == head.cursor => notice("revision"),
+        Some(since) => match cache.changes(since) {
+            None => notice("reset"),
+            Some(range) => match serde_json::to_vec(&range) {
+                Ok(body) if body.len() <= STREAMED_CHANGES_LIMIT => {
+                    let mut frame =
+                        format!("id: {}\nevent: changes\ndata: ", head.cursor.query_value())
+                            .into_bytes();
+                    frame.extend(body);
+                    frame.extend(b"\n\n");
+                    frame
+                }
+                _ => notice("revision"),
+            },
+        },
+    };
+    told.revision = head.revision.clone();
+    told.cursor = Some(head.cursor.clone());
+    Some(frame)
+}
+
 fn remember_peer<R>(
     shared: &Shared<R>,
     request: &Request,

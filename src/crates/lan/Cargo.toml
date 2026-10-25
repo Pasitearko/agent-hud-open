@@ -20,6 +20,10 @@ rustls = { version = "=0.23.46", default-features = false, features = ["std", "r
 uuid = { version = "1", features = ["v4"] }
 flate2 = "=1.1.10"
 
+[dev-dependencies]
+# A throwaway TLS key for the loopback stream test; the same ring rustls uses.
+ring = "=0.17.14"
+
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 

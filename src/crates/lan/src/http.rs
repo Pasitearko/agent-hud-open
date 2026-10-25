@@ -47,7 +47,9 @@ impl Request {
             return Parse::Invalid;
         }
         if query.is_some_and(|query| {
-            path != "/v1/changes" || !query.starts_with("since=") || query.contains('&')
+            !matches!(path, "/v1/changes" | "/v1/events")
+                || !query.starts_with("since=")
+                || query.contains('&')
         }) {
             return Parse::Invalid;
         }
@@ -102,6 +104,13 @@ impl Request {
             .strip_prefix("since=")
             .and_then(decode_query)
             .and_then(|value| crate::Cursor::parse(&value))
+    }
+    /// Whether an event stream's client takes the changes themselves
+    /// (`X-AgentHUD-Stream: changes`). Others get revision notices only.
+    pub fn streams_changes(&self) -> bool {
+        self.headers
+            .get("x-agenthud-stream")
+            .is_some_and(|value| value == "changes")
     }
 }
 /// Bodies under this size gain too little from compression to be worth it.
