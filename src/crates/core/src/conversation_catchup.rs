@@ -118,7 +118,7 @@ impl AgentHudCore {
                 wanted.push((updated, log.path.clone(), span));
             }
         }
-        wanted.sort_by(|a, b| b.0.cmp(&a.0));
+        wanted.sort_by_key(|a| std::cmp::Reverse(a.0));
         let mut budget = PASS_BUDGET;
         for (_, path, (from, to)) in wanted {
             if budget == 0 {
