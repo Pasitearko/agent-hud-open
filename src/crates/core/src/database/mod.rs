@@ -29,8 +29,11 @@ fn ensure_column(db: &Connection, table: &str, column: &str, def: &str) -> rusql
 
 /// Initializes all database tables, columns, and indexes in one place.
 pub(crate) fn schema(db: &Connection) -> rusqlite::Result<()> {
+    // A large one-off write (a migration, an import) grows the WAL file, and
+    // SQLite keeps that size after checkpointing unless a limit is set.
     db.execute_batch(
         "PRAGMA journal_mode=WAL;
+        PRAGMA journal_size_limit=16777216;
         CREATE TABLE IF NOT EXISTS ingestion_logs(
             path TEXT PRIMARY KEY,
             payload TEXT NOT NULL,
@@ -334,6 +337,31 @@ pub(crate) fn open(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_large_write_leaves_the_wal_file_small_after_a_checkpoint() {
+        let directory = tempfile::tempdir().unwrap();
+        let (db, ..) = open(directory.path()).unwrap();
+        let big = "x".repeat(32 * 1024 * 1024);
+        db.execute(
+            "INSERT INTO ingestion_meta(key,value) VALUES('big',?1)",
+            [&big],
+        )
+        .unwrap();
+        // The automatic checkpoint after each commit merges the big write;
+        // the next writes restart the WAL from the beginning.
+        for value in ["1", "2"] {
+            db.execute(
+                "INSERT OR REPLACE INTO ingestion_meta(key,value) VALUES('small',?1)",
+                [value],
+            )
+            .unwrap();
+        }
+        let wal = fs::metadata(directory.path().join("ingestion.sqlite-wal"))
+            .unwrap()
+            .len();
+        assert!(wal <= 16 * 1024 * 1024, "WAL file kept {wal} bytes");
+    }
 
     #[test]
     fn turn_text_earlier_builds_kept_leaves_the_checkpoints_once() {
