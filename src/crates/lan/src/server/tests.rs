@@ -362,3 +362,25 @@ fn a_commit_reaches_an_open_stream_at_once() {
     server.stop(false).unwrap();
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+#[test]
+fn peer_version_is_trimmed_and_bounded() {
+    let request = |value: &str| Request {
+        method: "GET".into(),
+        path: "/".into(),
+        query: None,
+        headers: BTreeMap::from([("x-agenthud-client-version".into(), value.into())]),
+        body: Vec::new(),
+    };
+    assert_eq!(
+        peer_version(&request(" 1.7.4 (96) ")).as_deref(),
+        Some("1.7.4 (96)")
+    );
+    assert_eq!(peer_version(&request("   ")), None);
+    assert_eq!(peer_version(&request("1.7\n(96)")), None);
+    assert_eq!(peer_version(&request(&"9".repeat(41))), None);
+    assert_eq!(
+        peer_version(&request(&"9".repeat(40))).map(|v| v.len()),
+        Some(40)
+    );
+}

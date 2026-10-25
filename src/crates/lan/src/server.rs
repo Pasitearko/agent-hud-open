@@ -31,6 +31,9 @@ pub type Extension = Arc<dyn Fn(&Request, &Authorization) -> Result<Option<Handl
 pub struct Peer {
     pub id: String,
     pub name: Option<String>,
+    /// The client app's version, as its `X-AgentHUD-Client-Version` header
+    /// gives it (`1.7.4 (96)`).
+    pub version: Option<String>,
     pub address: String,
     pub access: String,
     pub online: bool,
@@ -770,12 +773,15 @@ fn remember_peer<R>(
         streams.get(&peer_id).copied().unwrap_or(0) > 0
     };
     let mut peers = shared.peers.lock().unwrap_or_else(|p| p.into_inner());
-    let prior_name = peers.get(&peer_id).and_then(|p| p.name.clone());
+    let prior = peers.get(&peer_id);
+    let prior_name = prior.and_then(|p| p.name.clone());
+    let prior_version = prior.and_then(|p| p.version.clone());
     peers.insert(
         peer_id.clone(),
         Peer {
             id: peer_id.clone(),
             name: peer_name(request).or(prior_name),
+            version: peer_version(request).or(prior_version),
             address: address.ip().to_string(),
             access: if *authorization == Authorization::Automatic {
                 "automatic"
@@ -788,6 +794,19 @@ fn remember_peer<R>(
         },
     );
     peer_id
+}
+
+/// The client's version header: at most 40 bytes, trimmed, no control characters.
+fn peer_version(request: &Request) -> Option<String> {
+    let text = request
+        .headers
+        .get("x-agenthud-client-version")
+        .filter(|s| s.len() <= 40)?;
+    if text.chars().any(char::is_control) {
+        return None;
+    }
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.into())
 }
 
 fn peer_name(request: &Request) -> Option<String> {
