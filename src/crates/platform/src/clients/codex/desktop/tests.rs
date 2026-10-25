@@ -244,6 +244,10 @@ fn observer_owned_reply_settle_and_disconnect_fixture() {
         // A CLI thread in flight is not followed; a Desktop thread is.
         observer.update_sessions(&[json!({"id":THREAD,"source":AGENT.id,"state":"running"})]);
         assert!(observer.shared.wanted().is_empty());
+        // Another app-server client's thread opens in Codex, but Desktop does
+        // not hold it.
+        observer.update_sessions(&[json!({"id":THREAD,"source":AGENT.id,"state":"running","client":"codex_ask","navigationTarget":{"kind":"codex-thread","id":THREAD}})]);
+        assert!(observer.shared.wanted().is_empty());
         observer.update_sessions(&[json!({"id":THREAD,"source":AGENT.id,"state":"running","navigationTarget":{"kind":"codex-thread","id":THREAD}})]);
         wait(|| requests.views(crate::hooks::now_ms()).len() == 1);
         assert!(

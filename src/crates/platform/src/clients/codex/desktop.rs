@@ -88,8 +88,9 @@ impl CodexDesktopObserver {
         let mut changed = false;
         // Only threads Codex Desktop holds are followed: a session in flight
         // whose way back is its Desktop thread, sub-agents included (each is
-        // its own session row); a CLI or daemon thread has no owner to ask
-        // (agent-hud-native-open CodexDesktopPermissionObserver.threadIDs).
+        // its own session row); a CLI or daemon thread has no owner to ask,
+        // and another app-server client's thread opens in Codex but is not
+        // Desktop's (agent-hud-native-open CodexDesktopPermissionObserver.threadIDs).
         for session in sessions {
             let target = &session["navigationTarget"];
             if session["source"] != AGENT.id
@@ -98,6 +99,7 @@ impl CodexDesktopObserver {
                     Some("codex-thread" | "codexThread")
                 )
                 || !matches!(session["state"].as_str(), Some("running" | "waiting"))
+                || agent_hud_agents::naming::clients::codex_other_client(session["client"].as_str())
             {
                 continue;
             }

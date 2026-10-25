@@ -52,6 +52,20 @@ pub fn client_name(source: &str, client: Option<&str>) -> Option<String> {
     }
 }
 
+/// Whether a Codex session's shown client is another app-server client
+/// (a wrapper's own originator, such as `codex_ask`), not Codex Desktop, the
+/// CLI or the IDE extension. Codex keeps those threads in its own list, so
+/// they open in the Codex app; Codex Desktop does not hold them.
+pub fn codex_other_client(client: Option<&str>) -> bool {
+    client.is_some_and(|client| {
+        !client.is_empty()
+            && !matches!(
+                client,
+                "Codex Desktop" | "Codex CLI" | "Codex IDE extension" | "Codex"
+            )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +108,20 @@ mod tests {
         );
         assert_eq!(client_name("claude", None).as_deref(), Some("Claude Code"));
         assert_eq!(client_name("deepseek", None), None);
+    }
+
+    #[test]
+    fn other_codex_clients_are_the_ones_codex_does_not_name() {
+        assert!(codex_other_client(Some("codex_ask")));
+        for own in [
+            "Codex Desktop",
+            "Codex CLI",
+            "Codex IDE extension",
+            "Codex",
+            "",
+        ] {
+            assert!(!codex_other_client(Some(own)), "{own}");
+        }
+        assert!(!codex_other_client(None));
     }
 }

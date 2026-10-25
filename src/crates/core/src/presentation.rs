@@ -75,6 +75,18 @@ impl Presentation<'_> {
         ) {
             self.hooks.overlay(session, self.now, own_line, client);
         }
+        // Another app-server client's thread (a wrapper's own originator)
+        // opens in the Codex app, which lists it too. Its app-server runs
+        // outside Codex Desktop, so a hook origin has cleared the way back.
+        if session["source"] == "codex"
+            && session["navigationTarget"].is_null()
+            && agent_hud_agents::naming::clients::codex_other_client(session["client"].as_str())
+        {
+            let id = session["id"].as_str().unwrap_or("").to_owned();
+            if agent_hud_agents::claude::transcript::uuid(&id) {
+                session["navigationTarget"] = json!({"kind":"codex-thread","id":id});
+            }
+        }
         if claude && session["navigationTarget"].is_null() {
             self.background_job_target(session, desktop);
         }

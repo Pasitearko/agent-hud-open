@@ -165,3 +165,55 @@ fn a_background_job_returns_by_moving_into_the_desktop_app() {
     core.ingest_hook_events(vec![origin(&id, "cli", Value::Null, 0)]);
     assert_eq!(target(&mut core, &id), Value::Null);
 }
+
+/// A Codex rollout this client wrote, with one token count, now.
+fn codex_rollout(home: &Path, id: &str, source: &str, originator: &str) {
+    let at = Utc::now().to_rfc3339();
+    let lines = [
+        json!({"timestamp":at,"type":"session_meta","payload":{"id":id,"timestamp":at,"cwd":"/w/repo","source":source,"originator":originator}}),
+        json!({"timestamp":at,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":0}}}}),
+    ];
+    let path = home
+        .join(".codex/sessions/2026/10/26")
+        .join(format!("rollout-{id}.jsonl"));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+    fs::write(path, text).unwrap();
+}
+
+#[test]
+fn another_app_server_clients_codex_thread_opens_in_codex() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let mut core = core(home);
+    core.provider_roots = vec![(home.join(".codex/sessions"), "codex")];
+
+    // A wrapper script's own app-server client: Codex lists its thread.
+    let asked = session_id();
+    codex_rollout(home, &asked, "vscode", "codex_ask");
+    assert_eq!(
+        target(&mut core, &asked),
+        json!({"kind":"codex-thread","id":asked})
+    );
+
+    // Its hooks ran under an app-server outside Codex Desktop, which names
+    // no way back; the thread still opens in Codex.
+    let hooked = session_id();
+    codex_rollout(home, &hooked, "vscode", "codex_ask");
+    core.ingest_hook_events(vec![HookEvent {
+        source: "codex".into(),
+        ..origin(&hooked, "daemon", Value::Null, 30_000)
+    }]);
+    assert_eq!(
+        target(&mut core, &hooked),
+        json!({"kind":"codex-thread","id":hooked})
+    );
+
+    // The IDE extension's and the CLI's threads belong to their own windows.
+    let ide = session_id();
+    codex_rollout(home, &ide, "vscode", "codex_vscode");
+    assert_eq!(target(&mut core, &ide), Value::Null);
+    let cli = session_id();
+    codex_rollout(home, &cli, "cli", "codex_cli_rs");
+    assert_eq!(target(&mut core, &cli), Value::Null);
+}
