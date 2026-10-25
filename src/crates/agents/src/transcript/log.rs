@@ -142,10 +142,19 @@ fn empty_object() -> Value {
 
 impl Log {
     pub fn new(path: PathBuf, source: &'static str) -> Self {
-        let id = path
+        let stem = path
             .file_stem()
             .and_then(|v| v.to_str())
-            .unwrap_or("session")
+            .unwrap_or("session");
+        // A Codex rollout's name ends with its thread's id, which its first
+        // line confirms: a session read before that line is whole already
+        // has the id it keeps, so the phone never sees it change.
+        let id = stem
+            .len()
+            .checked_sub(36)
+            .and_then(|start| stem.get(start..))
+            .filter(|tail| source == "codex" && crate::claude::transcript::uuid(tail))
+            .unwrap_or(stem)
             .to_owned();
         let live = LiveLog::new(&path, source);
         // Codex moves the rollouts of a thread it archives into

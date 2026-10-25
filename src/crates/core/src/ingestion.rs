@@ -444,8 +444,19 @@ impl AgentHudCore {
             .values()
             .filter(|log| !log.gone)
             .filter_map(|log| {
+                // A session that just began may have been read before its
+                // first line was whole, so it has no event yet. Its client can
+                // hold the log open, and macOS then reports the writes tens of
+                // seconds late (a VS Code Codex rollout, 2026-10-26), so its
+                // last write stands in for an event until one is read.
+                let begun = (log.waiting_for_more || !log.observed)
+                    .then_some(log.modified)
+                    .flatten()
+                    .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+                    .and_then(|at| i64::try_from(at.as_millis()).ok());
                 log.live
                     .last_event()
+                    .or(begun)
                     .filter(|at| *at >= cutoff)
                     .map(|at| (&log.path, at))
             })

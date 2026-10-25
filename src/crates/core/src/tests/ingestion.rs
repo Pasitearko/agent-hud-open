@@ -448,6 +448,49 @@ fn a_look_between_passes_notices_a_held_log_without_reading_it() {
 
 /// With nothing to wake it, the next pass is due at the walk of every log
 /// folder, or sooner at the retry of a log whose read failed.
+/// A session read while its first line was still being written has no event
+/// yet. Its client holds the log open, so the watcher reports the rest late;
+/// the look between passes still notices it, and the session keeps the id
+/// its rollout's name gives from the first read on (a VS Code Codex rollout,
+/// 2026-10-26).
+#[test]
+fn a_session_read_mid_first_line_is_looked_at_and_keeps_its_id() {
+    let temp = tempfile::tempdir().unwrap();
+    let folder = temp.path().join(".codex/sessions/2026/10/26");
+    fs::create_dir_all(&folder).unwrap();
+    let id = "01a1740e-b93b-7861-b384-33bd4f68dc1d";
+    let path = folder.join(format!("rollout-2026-10-26T01-14-44-{id}.jsonl"));
+    let timestamp = (Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
+    let meta = format!(
+        "{}\n",
+        json!({"timestamp":timestamp,"type":"session_meta","payload":{"id":id,"session_id":id,"timestamp":timestamp,"cwd":"/tmp/p","originator":"codex_vscode","source":"vscode","cli_version":"0.162.0","instructions":"x".repeat(4_000)}})
+    );
+    let (head, tail) = meta.split_at(2_000);
+    fs::write(&path, head).unwrap();
+    let mut backend = AgentHudCore::new(vec![], temp.path().join("app"));
+    let roots = vec![(temp.path().join(".codex/sessions"), "codex")];
+    backend.provider_roots = roots.clone();
+    backend.request("snapshot", json!({})).unwrap();
+    let first = &backend.logs[&path];
+    assert!(first.waiting_for_more && !first.observed);
+    assert_eq!(
+        first.id, id,
+        "the rollout's name gives the id before its first line is whole"
+    );
+    assert!(backend.active_logs().contains(&path));
+
+    // The rest of the line, which the watcher has not reported yet.
+    use std::io::Write;
+    let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    write!(f, "{tail}").unwrap();
+    drop(f);
+    assert!(backend.look(), "the half-read log grew");
+    backend.request("snapshot", json!({})).unwrap();
+    let read = &backend.logs[&path];
+    assert!(read.observed && !read.waiting_for_more);
+    assert_eq!(read.id, id);
+}
+
 #[test]
 fn the_next_pass_is_due_at_the_folder_walk_or_a_failed_reads_retry() {
     let temp = tempfile::tempdir().unwrap();
