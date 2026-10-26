@@ -1,8 +1,9 @@
 //! Model pricing catalog and token cost estimation.
 //!
-//! `catalog.json` is the 2026-09-25 price snapshot. Every rate is an integer
-//! number of pico currency units per token, preserving exact calculations.
-//! Unknown models and gateways deliberately have no estimate.
+//! `catalog.json` is a snapshot of the vendors' own price pages, taken on its
+//! `checkedOn` date. Every rate is an integer number of pico currency units
+//! per token, preserving exact calculations. Unknown models, ids no vendor
+//! publishes a price for, and gateways deliberately have no estimate.
 
 use chrono::{Datelike, FixedOffset, TimeZone, Timelike};
 use serde::Deserialize;
@@ -383,4 +384,143 @@ pub fn consumer_cost(
         .amount(kinds)?
         .checked_mul(factor(listing.model, at_ms))?;
     Some(ModelCost::new(listing.region.currency(), amount))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cost(source: &str, model: &str, tokens: &PriceTokens) -> Option<i128> {
+        cost_at(source, model, tokens, true, Region::International, None)
+            .map(|cost| cost.amount_pico)
+    }
+
+    fn every_kind() -> PriceTokens {
+        PriceTokens {
+            tokens_in: 10_000,
+            tokens_out: 3_000,
+            cache_read: 50_000,
+            cache_write: 2_000,
+            reasoning: 1_000,
+        }
+    }
+
+    #[test]
+    fn antigravity_effort_variants_cost_what_their_model_costs() {
+        let tokens = every_kind();
+        for (variant, model) in [
+            ("claude-opus-5-5-low", "claude-opus-5-5"),
+            ("claude-opus-5-5-medium", "claude-opus-5-5"),
+            ("claude-opus-5-5-high", "claude-opus-5-5"),
+            ("claude-opus-5-5-max", "claude-opus-5-5"),
+            ("claude-sonnet-5-5-low", "claude-sonnet-5-5"),
+            ("claude-sonnet-5-5-medium", "claude-sonnet-5-5"),
+            ("claude-sonnet-5-5-high", "claude-sonnet-5-5"),
+            ("claude-sonnet-5-5-max", "claude-sonnet-5-5"),
+            ("gemini-4-argon-low", "gemini-4-argon"),
+            ("gemini-4-argon-medium", "gemini-4-argon"),
+            ("gemini-4-argon-high", "gemini-4-argon"),
+            ("gemini-3.8-flash-low", "gemini-3.8-flash"),
+            ("gemini-3.8-flash-medium", "gemini-3.8-flash"),
+            ("gemini-3.8-flash-high", "gemini-3.8-flash"),
+        ] {
+            let priced = cost("antigravity", variant, &tokens);
+            assert!(
+                priced.is_some_and(|pico| pico > 0),
+                "{variant} has no price"
+            );
+            assert_eq!(priced, cost("antigravity", model, &tokens), "{variant}");
+            assert_eq!(
+                context_window("antigravity", variant, None, None),
+                context_window("antigravity", model, None, None),
+                "{variant}"
+            );
+        }
+    }
+
+    #[test]
+    fn haiku_5_5_pays_the_higher_list_for_a_prompt_over_100k() {
+        assert_eq!(
+            tier_starts("claude", "claude-haiku-5-5"),
+            Some(vec![100_001])
+        );
+        // A prompt counts fresh input, cache writes and cache reads.
+        let at = |cache_read| PriceTokens {
+            tokens_in: 10_000,
+            cache_write: 2_000,
+            cache_read,
+            tokens_out: 1_000,
+            reasoning: 0,
+        };
+        // $0.10 in, $0.20 1-hour write, $0.01 read, $0.50 out.
+        let short = 2_000 * 200_000 + 8_000 * 100_000 + 90_000 * 10_000 + 1_000 * 500_000;
+        assert_eq!(cost("claude", "claude-haiku-5-5", &at(90_000)), Some(short));
+        // $0.50 in, $1 1-hour write, $0.05 read, $2.50 out.
+        let long = 2_000 * 1_000_000 + 8_000 * 500_000 + 90_001 * 50_000 + 1_000 * 2_500_000;
+        assert_eq!(cost("claude", "claude-haiku-5-5", &at(90_001)), Some(long));
+        // A pre-summed bucket's prompt is unknown: base rates.
+        let summed = cost_at(
+            "claude",
+            "claude-haiku-5-5",
+            &at(90_001),
+            false,
+            Region::International,
+            None,
+        )
+        .map(|cost| cost.amount_pico);
+        assert_eq!(summed, Some(short + 10_000));
+        assert_eq!(
+            context_window("claude", "claude-haiku-5-5", None, None),
+            Some(1_000_000)
+        );
+    }
+
+    #[test]
+    fn gemini_4_argon_and_sonnet_5_5_cache_reads_follow_their_pages() {
+        let million = PriceTokens {
+            tokens_in: 1_000_000,
+            tokens_out: 1_000_000,
+            cache_read: 1_000_000,
+            cache_write: 0,
+            reasoning: 400_000,
+        };
+        // $2 in, $0.10 cached, $10 out with thinking.
+        let argon = cost_at(
+            "antigravity",
+            "gemini-4-argon",
+            &million,
+            true,
+            Region::International,
+            None,
+        )
+        .unwrap();
+        assert_eq!(argon.currency, "USD");
+        assert_eq!(argon.amount_pico, 12_100_000_000_000);
+        let read = PriceTokens {
+            cache_read: 1_000_000,
+            ..Default::default()
+        };
+        assert_eq!(
+            cost("claude", "claude-sonnet-5-5", &read),
+            Some(100_000_000_000)
+        );
+    }
+
+    #[test]
+    fn ids_no_vendor_prices_and_gateway_routes_stay_unpriced() {
+        let tokens = every_kind();
+        for (source, model) in [
+            ("antigravity", "gemini-3.8-flash-tiered"),
+            ("antigravity", "gemini-3.8-flash-n"),
+            ("codex", "codex-auto-review"),
+            ("cursor", "grok-bot"),
+            ("grok-bot", "grok-bot-default"),
+        ] {
+            assert_eq!(cost(source, model, &tokens), None, "{model}");
+        }
+        assert!(model_for("pi-model:claude-haiku-5-5#anthropic").is_some());
+        assert!(model_for("pi-model:claude-haiku-5-5#openrouter").is_none());
+        assert!(model_for("opencode-model:gemini-4-argon#google").is_some());
+        assert!(model_for("opencode-model:gemini-4-argon#google-vertex").is_none());
+    }
 }
