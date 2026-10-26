@@ -138,7 +138,9 @@ fn read_home(host: &dyn Host, executable: &Path, home: &Path) -> Result<Reading,
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut grace = deadline;
     let mut limits = None;
+    let mut refused = None::<String>;
     let mut account = Value::Null;
+    let mut requires_openai_auth = None;
     let mut answered = false;
     while let Some(message) = process.next(deadline.min(grace)) {
         let Some(id) = message["id"].as_u64() else {
@@ -149,6 +151,16 @@ fn read_home(host: &dyn Host, executable: &Path, home: &Path) -> Result<Reading,
             // without the signed-in email.
             if id == 3 {
                 answered = true;
+            } else if id == 2 {
+                // Limits need a ChatGPT sign-in; account/read says why
+                // there is none.
+                refused = Some(
+                    message["error"]["message"]
+                        .as_str()
+                        .unwrap_or("app-server error")
+                        .to_owned(),
+                );
+                grace = Instant::now() + Duration::from_secs(2);
             } else {
                 return Err(format!(
                     "Codex: {}",
@@ -170,14 +182,25 @@ fn read_home(host: &dyn Host, executable: &Path, home: &Path) -> Result<Reading,
                 }
                 3 => {
                     account = result["account"].clone();
+                    requires_openai_auth = result["requiresOpenaiAuth"].as_bool();
                     answered = true;
                 }
                 _ => {}
             }
         }
-        if limits.is_some() && answered {
+        if (limits.is_some() || refused.is_some()) && answered {
             break;
         }
+    }
+    if let (None, Some(error)) = (&limits, refused) {
+        return match no_plan_notice(&account, requires_openai_auth) {
+            Some(notice) => {
+                let mut reading = Reading::empty("codex");
+                reading.notice = Some(notice);
+                Ok(reading)
+            }
+            None => Err(format!("Codex: {error}")),
+        };
     }
     let limits = limits.ok_or_else(|| {
         if process.ended() {
@@ -198,6 +221,35 @@ fn read_home(host: &dyn Host, executable: &Path, home: &Path) -> Result<Reading,
         true,
     )
 }
+
+/// Why a Codex home has no ChatGPT plan limits, as account/read tells it: an
+/// API key, Amazon Bedrock, a model provider that needs no OpenAI sign-in, or
+/// no sign-in at all. None when it does not say.
+fn no_plan_notice(account: &Value, requires_openai_auth: Option<bool>) -> Option<String> {
+    match account["type"].as_str() {
+        Some("apiKey") => Some(l10n::text(
+            "Codex 用的是 API key 登录，没有 ChatGPT 套餐额度",
+            "Codex is signed in with an API key, which has no ChatGPT plan limits",
+        )),
+        Some("amazonBedrock") => Some(l10n::text(
+            "Codex 走的是 Amazon Bedrock，没有 ChatGPT 套餐额度",
+            "Codex runs on Amazon Bedrock, which has no ChatGPT plan limits",
+        )),
+        Some(_) => None,
+        None => match requires_openai_auth {
+            Some(false) => Some(l10n::text(
+                "Codex 用的是自定义模型服务，没有 ChatGPT 套餐额度",
+                "Codex uses a custom model provider, which has no ChatGPT plan limits",
+            )),
+            Some(true) if account.is_null() => Some(l10n::text(
+                "Codex 尚未登录，运行 codex login 登录 ChatGPT 后即可读取额度",
+                "Codex is not signed in. Run codex login with ChatGPT to read its quota",
+            )),
+            _ => None,
+        },
+    }
+}
+
 fn read_pi(host: &dyn Host) -> Result<Option<Reading>, String> {
     if host.cancelled() {
         return Ok(None);
@@ -785,6 +837,51 @@ mod tests {
         );
         let account = read(&host).unwrap().account.unwrap();
         assert_eq!(account["label"], "a@example.com");
+    }
+
+    #[test]
+    fn a_home_without_a_chatgpt_plan_says_why_instead_of_the_engine_error() {
+        let refused = json!({"id": 2, "error": {"message": "chatgpt authentication required to read rate limits"}});
+        let cases = [
+            (
+                json!({"account": {"type": "apiKey"}, "requiresOpenaiAuth": true}),
+                "Codex is signed in with an API key, which has no ChatGPT plan limits",
+            ),
+            (
+                json!({"account": {"type": "amazonBedrock"}, "requiresOpenaiAuth": false}),
+                "Codex runs on Amazon Bedrock, which has no ChatGPT plan limits",
+            ),
+            (
+                json!({"account": null, "requiresOpenaiAuth": false}),
+                "Codex uses a custom model provider, which has no ChatGPT plan limits",
+            ),
+            (
+                json!({"account": null, "requiresOpenaiAuth": true}),
+                "Codex is not signed in. Run codex login with ChatGPT to read its quota",
+            ),
+        ];
+        for (answer, notice) in cases {
+            let mut host = installed(limits(), Value::Null);
+            host.engine_replies.insert(2, refused.clone());
+            host.engine_replies
+                .insert(3, json!({"id": 3, "result": answer}));
+            let reading = read(&host).unwrap();
+            assert!(reading.quotas.is_empty(), "{notice}");
+            assert!(reading.account.is_none(), "{notice}");
+            assert_eq!(reading.notice.as_deref(), Some(notice));
+        }
+
+        // A ChatGPT sign-in whose limits fail still shows what Codex said.
+        let mut host = installed(limits(), Value::Null);
+        host.engine_replies.insert(2, refused);
+        host.engine_replies.insert(
+            3,
+            json!({"id": 3, "result": {"account": {"type": "chatgpt", "email": "a@example.com", "planType": "pro"}, "requiresOpenaiAuth": true}}),
+        );
+        assert_eq!(
+            read(&host).err().unwrap(),
+            "Codex: chatgpt authentication required to read rate limits"
+        );
     }
 
     #[test]
