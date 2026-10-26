@@ -117,7 +117,13 @@ impl<'a> Family<'a> {
         let mut priced = None::<i128>;
         let mut unpriced = 0;
         for log in std::iter::once(head).chain(self.descendants(&head.source, &head.id)) {
-            if let Some(cost) = log.priced_cost {
+            // A log priced before the priced part was kept has only its whole
+            // cost until it is priced again.
+            let part = match log.unpriced_tokens {
+                Some(_) => log.priced_cost,
+                None => log.list_cost,
+            };
+            if let Some(cost) = part {
                 priced = Some(priced.unwrap_or(0) + cost);
             }
             unpriced += log.unpriced_tokens.unwrap_or(0);
@@ -331,6 +337,36 @@ impl AgentHudCore {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn a_family_costs_what_its_priced_calls_cost_and_counts_the_rest() {
+        let head = |path: &str, id: &str, parent: Option<&str>| {
+            let mut log = Log::new(PathBuf::from(path), "claude");
+            log.id = id.into();
+            let mut head = LogHead::from_log(&log);
+            head.live.parent_id = parent.map(str::to_owned);
+            head
+        };
+        let dollars = |amount: i128| amount * 1_000_000_000_000;
+        let mut own = head("/a.jsonl", "s", None);
+        own.set_list_cost(Some(metering::ListCost {
+            priced: Some(dollars(2)),
+            unpriced_tokens: 0,
+        }));
+        let mut helper = head("/b.jsonl", "h", Some("s"));
+        helper.set_list_cost(Some(metering::ListCost {
+            priced: Some(dollars(1)),
+            unpriced_tokens: 500,
+        }));
+        // Priced before the priced part was kept: only its whole cost.
+        let mut older = head("/c.jsonl", "o", Some("s"));
+        older.list_cost = Some(dollars(3));
+        older.list_cost_priced = true;
+        let logs = [&own, &helper, &older];
+        assert_eq!(Family::new(&logs).priced_cost(&own), (Some(6.0), 500));
+        let alone = [&own];
+        assert_eq!(Family::new(&alone).priced_cost(&own), (Some(2.0), 0));
+    }
 
     fn core(home: &Path) -> AgentHudCore {
         let mut core = AgentHudCore::new(vec![], home.join("app"));
