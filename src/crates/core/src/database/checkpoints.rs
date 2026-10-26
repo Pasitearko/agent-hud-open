@@ -74,6 +74,14 @@ pub(crate) struct LogHead {
     /// heads from before it existed are priced a few at a time.
     #[serde(default)]
     pub list_cost_priced: bool,
+    /// What the calls with a list price cost, in pico US dollars; None when
+    /// none has one.
+    #[serde(default)]
+    pub priced_cost: Option<i128>,
+    /// The tokens of the calls with no list price; None until worked out,
+    /// so heads priced before it existed are priced again.
+    #[serde(default)]
+    pub unpriced_tokens: Option<u64>,
     /// A DeepSeek log's cost at the account's own prices, in pico units of
     /// US dollars and of yuan (`metering::account_cost`).
     #[serde(default)]
@@ -117,6 +125,8 @@ impl LogHead {
             buckets: log.buckets.clone(),
             list_cost: None,
             list_cost_priced: false,
+            priced_cost: None,
+            unpriced_tokens: None,
             account_cost: None,
             old_turns: Vec::new(),
             updated_at: None,
@@ -156,6 +166,8 @@ impl LogHead {
         self.activity_at(None).hash(&mut hash);
         self.usage.total().hash(&mut hash);
         self.list_cost.hash(&mut hash);
+        self.priced_cost.hash(&mut hash);
+        self.unpriced_tokens.hash(&mut hash);
         self.account_cost.hash(&mut hash);
         if let Ok(live) = serde_json::to_vec(&self.live) {
             live.hash(&mut hash);
@@ -177,10 +189,21 @@ impl LogHead {
     }
 
     /// Records the log's list cost (`metering::list_cost`).
-    pub fn set_list_cost(&mut self, cost: Option<i128>) {
-        self.list_cost = cost;
+    pub(crate) fn set_list_cost(&mut self, cost: Option<metering::ListCost>) {
+        self.list_cost = cost.and_then(|cost| cost.complete());
+        self.priced_cost = cost.and_then(|cost| cost.priced);
+        self.unpriced_tokens = Some(cost.map_or(0, |cost| cost.unpriced_tokens));
         self.list_cost_priced = true;
         self.prepare();
+    }
+
+    /// The log's list cost as it was recorded (`set_list_cost`).
+    pub(crate) fn list_costs(&self) -> Option<metering::ListCost> {
+        let unpriced_tokens = self.unpriced_tokens.unwrap_or(0);
+        (self.priced_cost.is_some() || unpriced_tokens > 0).then_some(metering::ListCost {
+            priced: self.priced_cost,
+            unpriced_tokens,
+        })
     }
 
     /// Works out the log's list cost and, for DeepSeek, its cost at the

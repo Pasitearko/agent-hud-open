@@ -15,7 +15,17 @@ import {
   snapshotLanguage,
   waited,
 } from "@agent-hud/ui/format";
-import { sessionStateWord, type TokenKindName } from "../lib/sessions";
+import {
+  sessionStateWord,
+  type ListMoney,
+  type TokenKindName,
+} from "../lib/sessions";
+export {
+  sessionMoney,
+  sessionsMoney,
+  unpricedHelp,
+  type ListMoney,
+} from "../lib/sessions";
 
 export type Arrangement = "day" | "active";
 export type Entry = SessionDetail["turns"][number];
@@ -65,9 +75,15 @@ export const compact = tokensShort;
 
 export const integer = (value: number) => numberFormat("en").format(value);
 
-/** What a session's calls would cost at API list prices, in US dollars; always an estimate. */
-export const cost = (value: number | null, zh = false) =>
-  value === null ? "—" : `≈${moneyAmount(value, "USD", zh ? "zh" : "en")}`;
+/** What a session's calls would cost at API list prices, in US dollars; always an estimate. A partial one, which leaves out calls with no list price, ends in "+". */
+export const cost = (value: number | null, zh = false, partial = false) =>
+  value === null
+    ? "—"
+    : `≈${moneyAmount(value, "USD", zh ? "zh" : "en")}${partial ? "+" : ""}`;
+
+/** `money` as a cost, "+" when calls with no list price are left out. */
+export const moneyText = (money: ListMoney, zh = false) =>
+  cost(money.value, zh, money.unpriced > 0);
 
 export const row: CSSProperties = {
   display: "flex",

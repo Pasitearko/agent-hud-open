@@ -16,7 +16,6 @@ import {
   clipped,
   ColorKey,
   compact,
-  cost,
   Dot,
   dotColor,
   inFlight,
@@ -24,11 +23,15 @@ import {
   kindColor,
   kindNames,
   Missing,
+  moneyText,
   numeric,
   plain,
   row,
+  sessionMoney,
+  sessionsMoney,
   statusLine,
   type Theme,
+  unpricedHelp,
 } from "./SessionTheme";
 
 /** The columns a session row and its day's header share: who and how, its turns, its figures. */
@@ -56,9 +59,7 @@ export function TodayCard({
   const zh = Boolean(theme.zh);
   const { total, kinds } = sessionKinds(sessions);
   const animatedTotal = useAnimatedNumber(total);
-  const knownCost = sessions.some((session) => session.cost !== null)
-    ? sessions.reduce((sum, session) => sum + (session.cost ?? 0), 0)
-    : null;
+  const money = sessionsMoney(sessions);
   const kindsTotal = kinds?.reduce((sum, entry) => sum + entry.value, 0) ?? 0;
   const ranked = topSessions(sessions, 5);
   const ranking = [
@@ -113,8 +114,11 @@ export function TodayCard({
               ? `今天 · ${partial ? "已加载 " : ""}${sessions.length} 个会话`
               : `Today · ${sessions.length}${partial ? " loaded " : " "}${sessions.length === 1 ? "session" : "sessions"}`}
           </strong>
-          {knownCost !== null && (
-            <span style={{ color: theme.secondary, fontSize: 11 }}>
+          {money.value !== null && (
+            <span
+              style={{ color: theme.secondary, fontSize: 11 }}
+              title={unpricedHelp(money.unpriced, zh)}
+            >
               {zh ? "费用 " : "Cost "}
               <span
                 style={{
@@ -124,7 +128,7 @@ export function TodayCard({
                   ...numeric,
                 }}
               >
-                {cost(knownCost, zh)}
+                {moneyText(money, zh)}
               </span>
             </span>
           )}
@@ -456,13 +460,20 @@ export function SessionRow({
         >
           {session.tokens > 0 ? compact(animatedTokens) : "—"}
         </strong>
-        <span style={numeric}>
+        <span
+          style={numeric}
+          title={
+            session.accountCost === undefined
+              ? unpricedHelp(sessionMoney(session).unpriced, zh)
+              : undefined
+          }
+        >
           {session.accountCost !== undefined
             ? // A priced account's own estimate, in its currency (Open's SessionMoney).
               session.accountCost
               ? `≈${moneyAmount(session.accountCost.amount, session.accountCost.currency, zh ? "zh" : "en", true)}`
               : "—"
-            : cost(session.cost, zh)}
+            : moneyText(sessionMoney(session), zh)}
         </span>
         <ContextFigure session={session} theme={theme} />
       </span>

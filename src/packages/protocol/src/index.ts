@@ -121,8 +121,12 @@ export interface Session {
   contextFill?: number | null;
   /** From Core: `tokens` by kind, sub-agents' included. */
   usage?: StatisticsTokens & { total: number };
-  /** From Core: what the calls, sub-agents' included, cost at API list prices, in US dollars. */
+  /** From Core: what the calls, sub-agents' included, cost at API list prices, in US dollars; null when a call has no list price. */
   cost: number | null;
+  /** From Core: what the calls with a list price cost, sub-agents' included, in US dollars; null when none has one. */
+  pricedCost?: number | null;
+  /** From Core: the tokens of the calls with no list price, sub-agents' included. */
+  unpricedTokens?: number;
   /** From Core: a DeepSeek session billed to a linked account, at the account's prices; null when a call has no price. Absent for other sessions. */
   accountCost?: { amount: number; currency: string } | null;
   contextPercent: number | null;
@@ -205,6 +209,8 @@ export interface StatisticsCost {
   pricedTokens: number;
   unpricedTokens: number;
   unpricedModels: string[];
+  /** From Core: the unpriced models as people read them, "Claude Code · qwen3-coder:30b". */
+  unpricedNames?: string[];
 }
 export interface StatisticsTotal {
   tokens: StatisticsTokens;
@@ -698,8 +704,12 @@ export interface SessionDetail {
   own?: SessionTokens | null;
   /** From Core: the sub-agents' part of the session's tokens (at any depth); already in `usage`, the turns and the models. Null when no sub-agent spent any. */
   subagents?: SessionTokens | null;
-  /** From Core: the breakdown at API list prices, US dollars. */
+  /** From Core: the breakdown at API list prices, US dollars; null when a call has no list price. */
   listCost?: number | null;
+  /** From Core: what the calls with a list price cost, US dollars; null when none has one. */
+  pricedCost?: number | null;
+  /** From Core: the tokens of the calls with no list price. */
+  unpricedTokens?: number;
   credits?: SessionCredits | null;
   /** From Core, for a requested turn: its calls, the session's and its sub-agents', and what they add up to. */
   turnCalls?: {
@@ -718,6 +728,8 @@ export interface SessionDetail {
     tokens: StatisticsTokens & { total?: number };
     /** From Core: the model's cache reads as a share of its prompts; null when it was prompted nothing. */
     cacheHitRate?: number | null;
+    /** From Core: whether the model, used through this client, has a list price. */
+    priced?: boolean;
   }[];
   /** From Core: the session's tokens by kind, sub-agents' included; the same as its row's. */
   usage?: StatisticsTokens & { total: number };
@@ -762,8 +774,12 @@ export interface SessionDetail {
     peakContext?: number | null;
     /** From Core: prompt tokens sent again because the cache lapsed. */
     recached?: number | null;
-    /** From Core: the turn at API list prices, US dollars. */
+    /** From Core: the turn at API list prices, US dollars; null when a call has no list price. */
     listCost?: number | null;
+    /** From Core: what the turn's calls with a list price cost, US dollars; null when none has one. */
+    pricedCost?: number | null;
+    /** From Core: the tokens of the turn's calls with no list price. */
+    unpricedTokens?: number;
     /** From Core: what sub-agents spent in the turn. */
     subagents?: SessionTokens | null;
     /** From Core: the same part in the chart's `input`, `output` and `cache`, which the chart fades. */

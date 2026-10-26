@@ -306,3 +306,55 @@ export function topSessions<T extends { tokens: number }>(
     },
   };
 }
+
+/** What a session's list-price money is made of (Session's `cost`, `pricedCost`, `unpricedTokens`). */
+export interface MoneyFacts {
+  cost: number | null;
+  pricedCost?: number | null;
+  unpricedTokens?: number;
+}
+
+/** Money at list prices: the whole cost, else what the priced calls cost, with the tokens of the calls that have no list price. */
+export interface ListMoney {
+  value: number | null;
+  unpriced: number;
+}
+
+/** A session's list-price money: its whole cost, else its priced calls' with the rest's tokens. */
+export function sessionMoney(session: MoneyFacts): ListMoney {
+  if (session.cost !== null) return { value: session.cost, unpriced: 0 };
+  return {
+    value: session.pricedCost ?? null,
+    unpriced: session.unpricedTokens ?? 0,
+  };
+}
+
+/** What sessions spent together at list prices; the value is null when none has a priced call. */
+export function sessionsMoney(sessions: MoneyFacts[]): ListMoney {
+  let value: number | null = null;
+  let unpriced = 0;
+  for (const session of sessions) {
+    const money = sessionMoney(session);
+    if (money.value !== null) value = (value ?? 0) + money.value;
+    unpriced += money.unpriced;
+  }
+  return { value, unpriced };
+}
+
+/** What a cost leaves out, as its tooltip says it; undefined when nothing. */
+export function unpricedHelp(
+  unpriced: number,
+  zh = false,
+  models: string[] = [],
+): string | undefined {
+  if (unpriced <= 0) return undefined;
+  const count = new Intl.NumberFormat("en").format(unpriced);
+  const named = models.length
+    ? zh
+      ? `：${models.join("、")}`
+      : `: ${models.join(", ")}`
+    : "";
+  return zh
+    ? `另有 ${count} 个 Token 来自没有 API 价格的模型，未计入${named}`
+    : `${count} more tokens came from models with no API list price and are not included${named}`;
+}

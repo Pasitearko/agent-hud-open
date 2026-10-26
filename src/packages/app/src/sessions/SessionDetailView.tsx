@@ -42,14 +42,17 @@ import {
   integer,
   kindColor,
   kindNames,
+  moneyText,
   numeric,
   plain,
   row,
+  sessionMoney,
   sinceLabel,
   stateLabel,
   timeLabel,
   type Entry,
   type Theme,
+  unpricedHelp,
 } from "./SessionTheme";
 
 function formatMessageText(value: unknown): string {
@@ -119,9 +122,11 @@ function turnNotes(entry: Entry, zh: boolean): string[] {
           ? (zh ? " · 轮中最高 " : " · peak ") + compact(entry.peakContext)
           : ""),
     );
-  if (entry.listCost != null)
+  const turnCost = entry.listCost ?? entry.pricedCost ?? null;
+  if (turnCost != null)
     notes.push(
-      cost(entry.listCost, zh) + (zh ? " 按 API 价" : " at API prices"),
+      cost(turnCost, zh, entry.listCost == null) +
+        (zh ? " 按 API 价" : " at API prices"),
     );
   return notes;
 }
@@ -233,6 +238,11 @@ export function DetailFigures({
   const language = zh ? "zh" : "en";
   // A priced account's own estimate comes first, as Open's SessionMoney.
   const account = session.accountCost !== undefined;
+  const money = sessionMoney(session);
+  const unpricedModels = (detail?.models ?? [])
+    .filter((model) => model.priced === false)
+    .map((model) => model.name ?? model.id ?? "")
+    .filter(Boolean);
   const credits = detail?.credits ?? null;
   const breakdown = detail?.turnsBy != null;
   const calls = detail?.callCount ?? 0;
@@ -266,12 +276,25 @@ export function DetailFigures({
         }
       : {
           title: zh ? "费用" : "Cost",
-          value: cost(session.cost, zh),
+          value: moneyText(money, zh),
           note:
-            session.cost === null ? "—" : zh ? "按 API 价" : "At API prices",
-          help: zh
-            ? "同样的调用按厂商 API 公开价计算的费用，不是实际扣费"
-            : "What the same calls cost at the vendor's API list price; not a charge",
+            money.value === null
+              ? "—"
+              : money.unpriced > 0
+                ? zh
+                  ? "部分 · 按 API 价"
+                  : "Partial · at API prices"
+                : zh
+                  ? "按 API 价"
+                  : "At API prices",
+          help: [
+            zh
+              ? "同样的调用按厂商 API 公开价计算的费用，不是实际扣费"
+              : "What the same calls cost at the vendor's API list price; not a charge",
+            unpricedHelp(money.unpriced, zh, unpricedModels),
+          ]
+            .filter(Boolean)
+            .join(zh ? "。" : ". "),
         },
     ...(credits
       ? [

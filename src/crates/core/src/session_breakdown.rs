@@ -109,6 +109,21 @@ impl<'a> Family<'a> {
         }
         total.map(|pico| pico as f64 / 1e12)
     }
+
+    /// What the calls with a list price, of a session and its sub-agents,
+    /// cost at API list prices in US dollars (None when no call has one),
+    /// and the tokens of the calls with none.
+    pub(crate) fn priced_cost(&self, head: &LogHead) -> (Option<f64>, u64) {
+        let mut priced = None::<i128>;
+        let mut unpriced = 0;
+        for log in std::iter::once(head).chain(self.descendants(&head.source, &head.id)) {
+            if let Some(cost) = log.priced_cost {
+                priced = Some(priced.unwrap_or(0) + cost);
+            }
+            unpriced += log.unpriced_tokens.unwrap_or(0);
+        }
+        (priced.map(|pico| pico as f64 / 1e12), unpriced)
+    }
 }
 
 impl AgentHudCore {
@@ -130,9 +145,10 @@ impl AgentHudCore {
     /// A session's tokens and money, as its row and its page show them
     /// (agent-hud-native-open `sessionTokens`, `SessionMoney`): `tokens` and `usage`
     /// (the same by kind) with its sub-agents', `cost` at API list prices with
-    /// its sub-agents, and, for a DeepSeek session billed to a linked account,
-    /// `accountCost` at the account's own prices in its currency (null when a
-    /// call has no price).
+    /// its sub-agents (null when a call has no list price), `pricedCost` for
+    /// the calls that have one with `unpricedTokens` for the rest, and, for a
+    /// DeepSeek session billed to a linked account, `accountCost` at the
+    /// account's own prices in its currency (null when a call has no price).
     pub(crate) fn session_totals(
         value: &mut Value,
         head: &LogHead,
@@ -143,6 +159,9 @@ impl AgentHudCore {
         value["tokens"] = json!(usage.total());
         value["usage"] = usage.json();
         value["cost"] = json!(family.list_cost(head));
+        let (priced, unpriced) = family.priced_cost(head);
+        value["pricedCost"] = json!(priced);
+        value["unpricedTokens"] = json!(unpriced);
         if let Some(currency) = currency.filter(|_| head.source == "deepseek") {
             value["accountCost"] = head
                 .account_cost_in(currency)

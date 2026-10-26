@@ -194,9 +194,11 @@ export function dateLabel(at: string | number, timeZone: string, zh = false) {
   }).format(new Date(at));
 }
 
-/** What the selection would cost at list prices, as Open writes it: "≈$12.30 · ≈¥45.60"; the help names what is unpriced. */
+/** What the selection would cost at list prices, as Open writes it: "≈$12.30 · ≈¥45.60"; "+" when unpriced tokens are left out, which the help names. */
 export function costText(cost: StatisticsCost | null, zh = false) {
-  return (cost && listCost(cost.amounts, zh ? "zh" : "en")) || "—";
+  const text = cost && listCost(cost.amounts, zh ? "zh" : "en");
+  if (!text) return "—";
+  return cost.unpricedTokens > 0 ? `${text}+` : text;
 }
 
 export function costHelp(cost: StatisticsCost | null, zh = false) {
@@ -204,9 +206,10 @@ export function costHelp(cost: StatisticsCost | null, zh = false) {
     return zh
       ? "当前筛选暂无目录价估算。"
       : "A list-price estimate is unavailable for this selection.";
+  const models = cost.unpricedNames ?? cost.unpricedModels;
   return zh
-    ? `按各厂商 API 目录价估算所选 Token 类型，不同币种不做换算。${cost.unpricedTokens ? `另有 ${integer(cost.unpricedTokens)} 个 Token 尚未定价${cost.unpricedModels.length ? `：${cost.unpricedModels.join("、")}` : ""}。` : ""}`
-    : `Selected token kinds at the vendors' API list prices; currencies are not converted.${cost.unpricedTokens ? ` ${integer(cost.unpricedTokens)} unpriced tokens${cost.unpricedModels.length ? `: ${cost.unpricedModels.join(", ")}` : ""}.` : ""}`;
+    ? `按各厂商 API 目录价估算所选 Token 类型，不同币种不做换算。${cost.unpricedTokens ? `另有 ${integer(cost.unpricedTokens)} 个 Token 来自没有 API 价格的模型，未计入${models.length ? `：${models.join("、")}` : ""}。` : ""}`
+    : `Selected token kinds at the vendors' API list prices; currencies are not converted.${cost.unpricedTokens ? ` ${integer(cost.unpricedTokens)} more tokens came from models with no API list price and are not included${models.length ? `: ${models.join(", ")}` : ""}.` : ""}`;
 }
 
 export function Coverage({

@@ -158,6 +158,8 @@ export function sessionFactsKey(session: Session | null | undefined) {
     session.updatedAt,
     session.tokens,
     session.cost,
+    session.pricedCost,
+    session.unpricedTokens,
     session.contextPercent,
     session.parentId,
   ]);

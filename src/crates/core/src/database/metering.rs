@@ -332,11 +332,28 @@ pub(crate) fn write(
     Ok(changed)
 }
 
+/// What a log's calls would cost at the vendors' API list prices: what the
+/// calls with a list price cost, and how many tokens the others used.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) struct ListCost {
+    /// The priced calls' cost in pico US dollars; None when no call has a price.
+    pub priced: Option<i128>,
+    /// The tokens of the calls with no list price.
+    pub unpriced_tokens: u64,
+}
+
+impl ListCost {
+    /// The whole cost; None when a call has no list price or there was none.
+    pub fn complete(&self) -> Option<i128> {
+        self.priced.filter(|_| self.unpriced_tokens == 0)
+    }
+}
+
 /// What a log's calls would cost at the vendors' API list prices: the
 /// international list at off-peak rates, in pico US dollars, each call on the
-/// tier its prompt reaches (agent-hud-native-open `ListPricing`). None when the log
-/// has no calls or one of them has no list price.
-pub(crate) fn list_cost(db: &Connection, path: &str) -> rusqlite::Result<Option<i128>> {
+/// tier its prompt reaches (agent-hud-native-open `ListPricing`). A call with
+/// no list price leaves the others priced; None when the log has no calls.
+pub(crate) fn list_cost(db: &Connection, path: &str) -> rusqlite::Result<Option<ListCost>> {
     let models = {
         let mut statement = db.prepare_cached(
             "SELECT DISTINCT source, model FROM usage_meter_event WHERE contribution=?1",
@@ -349,10 +366,17 @@ pub(crate) fn list_cost(db: &Connection, path: &str) -> rusqlite::Result<Option<
     if models.is_empty() {
         return Ok(None);
     }
-    let mut total = 0i128;
+    let mut cost = ListCost::default();
     for (source, model) in models {
         let Some(starts) = pricing::tier_starts(&source, &model) else {
-            return Ok(None);
+            let tokens: i64 = db
+                .prepare_cached(
+                    "SELECT COALESCE(SUM(input+output+cache_read+cache_write+reasoning),0)
+                     FROM usage_meter_event WHERE contribution=?1 AND source=?2 AND model=?3",
+                )?
+                .query_row(params![path, source, model], |row| row.get(0))?;
+            cost.unpriced_tokens += u64::try_from(tokens).unwrap_or(0);
+            continue;
         };
         // The tier a call is on: the last start its prompt reaches, -1 for the base rates.
         let tier = starts
@@ -381,13 +405,15 @@ pub(crate) fn list_cost(db: &Connection, path: &str) -> rusqlite::Result<Option<
                 cache_write: used.write,
                 reasoning: used.reasoning,
             };
-            let Some(cost) = pricing::cost_in_tier(&source, &model, &tokens, tier) else {
-                return Ok(None);
-            };
-            total += cost.amount_pico;
+            match pricing::cost_in_tier(&source, &model, &tokens, tier) {
+                Some(priced) => {
+                    cost.priced = Some(cost.priced.unwrap_or(0) + priced.amount_pico);
+                }
+                None => cost.unpriced_tokens += used.total(),
+            }
         }
     }
-    Ok(Some(total))
+    Ok(Some(cost))
 }
 
 /// Keeps the largest prompt each model was seen with, which tells its context
@@ -1652,7 +1678,13 @@ mod retention_tests {
                 .amount_pico
             })
             .sum();
-        assert_eq!(list_cost(&db, "/logs/s.jsonl").unwrap(), Some(one_by_one));
+        assert_eq!(
+            list_cost(&db, "/logs/s.jsonl").unwrap(),
+            Some(ListCost {
+                priced: Some(one_by_one),
+                unpriced_tokens: 0
+            })
+        );
 
         write(
             &db,
@@ -1664,11 +1696,14 @@ mod retention_tests {
             }],
         )
         .unwrap();
+        let partial = list_cost(&db, "/logs/s.jsonl").unwrap().unwrap();
         assert_eq!(
-            list_cost(&db, "/logs/s.jsonl").unwrap(),
-            None,
-            "one unpriced call leaves the session unpriced"
+            partial.priced,
+            Some(one_by_one),
+            "one unpriced call leaves the other calls priced"
         );
+        assert_eq!(partial.unpriced_tokens, call("d", 1, 0).usage.total());
+        assert_eq!(partial.complete(), None, "and the whole cost unknown");
         assert_eq!(
             list_cost(&db, "/logs/none.jsonl").unwrap(),
             None,

@@ -30,14 +30,15 @@ import {
   card,
   clipped,
   compact,
-  cost,
   dayStart,
   earlier,
   inFlight,
+  moneyText,
   numeric,
   plain,
   projectName,
   row,
+  sessionsMoney,
   SourceSelect,
   themeFor,
   titleForDay,
@@ -521,15 +522,7 @@ export default function SessionStatistics({
                   (sum, session) => sum + session.tokens,
                   0,
                 );
-                const groupHasCost = group.sessions.some(
-                  (session) => session.cost !== null,
-                );
-                const groupCost = groupHasCost
-                  ? group.sessions.reduce(
-                      (sum, session) => sum + (session.cost ?? 0),
-                      0,
-                    )
-                  : null;
+                const groupMoney = sessionsMoney(group.sessions);
                 return (
                   <div key={group.day}>
                     <DayHeader
@@ -538,7 +531,9 @@ export default function SessionStatistics({
                       running={activeCount}
                       open={open}
                       folded={[
-                        groupCost !== null ? cost(groupCost, zh) : null,
+                        groupMoney.value !== null
+                          ? moneyText(groupMoney, zh)
+                          : null,
                         groupTokens > 0 ? compact(groupTokens) : "—",
                       ]
                         .filter(Boolean)

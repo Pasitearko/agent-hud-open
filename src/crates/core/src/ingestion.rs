@@ -862,7 +862,7 @@ impl AgentHudCore {
                     priced
                         .price(&transaction, &path_str)
                         .map_err(|e| e.to_string())?;
-                    costs = (priced.list_cost, priced.account_cost);
+                    costs = (priced.list_costs(), priced.account_cost);
                     let encoded_head = serde_json::to_string(&priced)
                         .map_err(|_| "Checkpoint head encoding failed".to_owned())?;
                     checkpoints::upsert_log(
@@ -1017,7 +1017,7 @@ impl AgentHudCore {
         let unpriced = self
             .logs
             .iter()
-            .filter(|(_, head)| !head.list_cost_priced)
+            .filter(|(_, head)| !head.list_cost_priced || head.unpriced_tokens.is_none())
             .map(|(path, _)| path.clone())
             .take(limit)
             .collect::<Vec<_>>();

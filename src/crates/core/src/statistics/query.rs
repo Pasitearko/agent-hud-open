@@ -207,7 +207,20 @@ impl Money {
         if self.priced + self.unpriced == 0 {
             return Value::Null;
         }
-        json!({"amounts":self.amounts.iter().map(|(currency,value)|(currency.clone(),*value as f64/1e12)).collect::<BTreeMap<_,_>>(),"pricedTokens":self.priced,"unpricedTokens":self.unpriced,"unpricedModels":self.unknown})
+        // The unpriced models as people read them: "Claude Code · qwen3-coder:30b".
+        let names = self
+            .unknown
+            .iter()
+            .map(|id| {
+                let source = id.split_once("-model:").map_or("", |(source, _)| source);
+                format!(
+                    "{} · {}",
+                    provider_name(source),
+                    crate::naming::model_names::consumer_name(id)
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        json!({"amounts":self.amounts.iter().map(|(currency,value)|(currency.clone(),*value as f64/1e12)).collect::<BTreeMap<_,_>>(),"pricedTokens":self.priced,"unpricedTokens":self.unpriced,"unpricedModels":self.unknown,"unpricedNames":names})
     }
 }
 
@@ -386,4 +399,24 @@ fn ceil(at: i64) -> i64 {
 
 pub(super) fn overlaps(at: i64, from: i64, to: i64) -> bool {
     at + QUARTER > from && at < to
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unpriced_models_are_named_as_people_read_them() {
+        let mut money = Money::default();
+        money.add("claude-model:qwen3-coder:30b", 1_000, None);
+        money.add("claude-model:qwen3-coder:30b", 500, None);
+        let json = money.json();
+        assert_eq!(json["unpricedTokens"], 1_500);
+        assert_eq!(json["unpricedModels"][0], "claude-model:qwen3-coder:30b");
+        let name = json["unpricedNames"][0].as_str().unwrap();
+        assert!(
+            name.starts_with("Claude Code · ") && name.ends_with("qwen3-coder:30b"),
+            "{name}"
+        );
+    }
 }

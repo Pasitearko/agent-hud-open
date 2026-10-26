@@ -67,13 +67,13 @@ pub(crate) fn recached(usage: Usage, previous: Option<u64>) -> u64 {
 #[derive(Clone, Default)]
 pub(crate) struct ListTally {
     groups: HashMap<(String, String, Option<usize>), Usage>,
-    unpriced: bool,
+    unpriced_tokens: u64,
 }
 
 impl ListTally {
     pub(crate) fn add(&mut self, source: &str, model: &str, usage: Usage) {
         let Some(starts) = pricing::tier_starts(source, model) else {
-            self.unpriced = true;
+            self.unpriced_tokens += usage.total();
             return;
         };
         let tier = pricing::tier_of(&starts, prompt(usage));
@@ -83,18 +83,19 @@ impl ListTally {
             .add(usage);
     }
 
-    /// None when a call's model has no list price, or there were no calls.
-    pub(crate) fn cost(&self) -> Option<i128> {
-        if self.unpriced || self.groups.is_empty() {
-            return None;
+    /// What the calls with a list price cost, and the tokens of the others.
+    pub(crate) fn cost(&self) -> metering::ListCost {
+        let mut cost = metering::ListCost {
+            priced: None,
+            unpriced_tokens: self.unpriced_tokens,
+        };
+        for ((source, model, tier), usage) in &self.groups {
+            match pricing::cost_in_tier(source, model, &metering::price_tokens(*usage), *tier) {
+                Some(priced) => cost.priced = Some(cost.priced.unwrap_or(0) + priced.amount_pico),
+                None => cost.unpriced_tokens += usage.total(),
+            }
         }
-        self.groups
-            .iter()
-            .try_fold(0i128, |total, ((source, model, tier), usage)| {
-                let cost =
-                    pricing::cost_in_tier(source, model, &metering::price_tokens(*usage), *tier)?;
-                Some(total + cost.amount_pico)
-            })
+        cost
     }
 }
 
@@ -162,8 +163,8 @@ pub(crate) struct Turn {
     pub peak_context: Option<u64>,
     /// Prompt tokens the own log sent again because the cache lapsed.
     pub recached: Option<u64>,
-    /// Pico US dollars at list prices; None when a call has no list price.
-    pub list_cost: Option<i128>,
+    /// At list prices: what the priced calls cost and the others' tokens.
+    pub list_cost: metering::ListCost,
 }
 
 impl Turn {
@@ -197,8 +198,9 @@ pub(crate) struct SessionUsage {
     pub turns: Vec<Turn>,
     pub turn_count: usize,
     pub context_window: Option<u64>,
-    /// Pico US dollars at list prices, sub-agents included.
-    pub list_cost: Option<i128>,
+    /// At list prices, sub-agents included: what the priced calls cost and
+    /// the others' tokens.
+    pub list_cost: metering::ListCost,
 }
 
 impl Builder {
@@ -511,7 +513,9 @@ impl SessionUsage {
                     })
                     .unwrap_or(Value::Null);
                 value["recached"] = json!(turn.recached);
-                value["listCost"] = usd(turn.list_cost);
+                value["listCost"] = usd(turn.list_cost.complete());
+                value["pricedCost"] = usd(turn.list_cost.priced);
+                value["unpricedTokens"] = json!(turn.list_cost.unpriced_tokens);
                 value
             })
             .collect();
@@ -530,13 +534,16 @@ impl SessionUsage {
             "contextWindow": self.context_window,
             "contextFill": self.context_fill(),
             "cacheHitRate": self.cache_hit_rate(),
-            "listCost": usd(self.list_cost),
+            "listCost": usd(self.list_cost.complete()),
+            "pricedCost": usd(self.list_cost.priced),
+            "unpricedTokens": self.list_cost.unpriced_tokens,
             "models": self.models.iter().map(|((source, model), usage)| {
                 let id = format!("{source}-model:{model}");
                 let prompted = prompt(*usage);
                 json!({"id": id, "provider": source, "model": model,
                        "name": crate::naming::model_names::consumer_name(&id), "tokens": tokens_json(*usage),
-                       "cacheHitRate": (prompted > 0).then(|| usage.read as f64 / prompted as f64)})
+                       "cacheHitRate": (prompted > 0).then(|| usage.read as f64 / prompted as f64),
+                       "priced": pricing::tier_starts(source, model).is_some()})
             }).collect::<Vec<_>>(),
         })
     }
@@ -685,11 +692,11 @@ impl SessionUsage {
                 "subagents": turn.subagents.map(open_tokens),
                 "peakContextTokens": turn.peak_context,
                 "recachedTokens": turn.recached,
-                "listCost": turn.list_cost.map(decimal_text),
+                "listCost": turn.list_cost.complete().map(decimal_text),
             })).collect::<Vec<_>>(),
             "turnCount": self.turn_count,
             "contextWindow": self.context_window,
-            "listCost": self.list_cost.map(decimal_text),
+            "listCost": self.list_cost.complete().map(decimal_text),
         })
     }
 }
@@ -906,15 +913,15 @@ mod tests {
             "Opus 4.5's published window"
         );
         assert_eq!(usage.models[0].0 .1, "claude-opus-4-5");
-        assert!(usage.list_cost.is_some_and(|cost| cost > 0));
+        assert!(usage.list_cost.complete().is_some_and(|cost| cost > 0));
         let turns = usage
             .turns
             .iter()
-            .filter_map(|turn| turn.list_cost)
+            .filter_map(|turn| turn.list_cost.complete())
             .sum::<i128>();
         assert_eq!(
             Some(turns),
-            usage.list_cost,
+            usage.list_cost.complete(),
             "turns cost what the session costs"
         );
         let page = usage.json();
@@ -1133,7 +1140,7 @@ mod tests {
     }
 
     #[test]
-    fn a_model_without_a_list_price_leaves_the_cost_unknown() {
+    fn a_model_without_a_list_price_leaves_the_whole_cost_unknown_and_the_rest_priced() {
         let priced = row(10, "claude-opus-4-5", 100, 0, 0, 10);
         let unpriced = row(20, "no-such-model", 100, 0, 0, 10);
         let mut builder = Builder::new(vec![0], Vec::new());
@@ -1148,8 +1155,32 @@ mod tests {
             call_log: true,
         });
         let usage = builder.build(|_, _, _| None);
-        assert_eq!(usage.list_cost, None);
-        assert_eq!(usage.turns[0].list_cost, None);
+        assert_eq!(usage.list_cost.complete(), None);
+        assert_eq!(usage.turns[0].list_cost.complete(), None);
+        let alone = metering::call_list_cost("claude", "claude-opus-4-5", priced.usage);
+        assert!(alone.is_some_and(|cost| cost > 0));
+        assert_eq!(
+            usage.list_cost.priced, alone,
+            "the priced call keeps its cost"
+        );
+        assert_eq!(usage.list_cost.unpriced_tokens, unpriced.usage.total());
+        assert_eq!(usage.turns[0].list_cost, usage.list_cost);
+        let page = usage.json();
+        assert_eq!(page["listCost"], Value::Null);
+        assert_eq!(page["unpricedTokens"], unpriced.usage.total());
+        assert!(page["pricedCost"].as_f64().is_some_and(|cost| cost > 0.0));
+        let models = page["models"].as_array().unwrap();
+        assert!(models
+            .iter()
+            .any(|model| model["model"] == "no-such-model" && model["priced"] == false));
+        assert!(models
+            .iter()
+            .any(|model| model["model"] == "claude-opus-4-5" && model["priced"] == true));
+        assert_eq!(
+            usage.open_json(&BTreeMap::new())["listCost"],
+            Value::Null,
+            "the phone's format keeps a partly priced session unpriced"
+        );
     }
 
     #[test]
